@@ -12,7 +12,8 @@ def main():
         return
 
     for obj in selection:
-        doc.AddUndo(c4d.UNDOTYPE_DELETE, obj)  # Record for undo
+        original_parent = obj.GetUp()  # Store the original parent
+        original_pred = obj.GetPred()  # Store the original predecessor (sibling)
 
         # If the object is an Extrude object, make it editable first
         if obj.GetType() == c4d.Oextrude:
@@ -34,7 +35,6 @@ def main():
             # Directly use non-Extrude objects
             poly_obj = obj
 
-        # Proceed to connect and delete
         if poly_obj:
             # Store the original matrix and name
             original_matrix = poly_obj.GetMg()
@@ -51,11 +51,14 @@ def main():
                 new_obj.SetMg(original_matrix)
                 new_obj.SetName(original_name)
 
-                # Insert the new object at the same place as the old one
+                # Remove the new object from its current place in the hierarchy
                 new_obj.Remove()
-                doc.InsertObject(new_obj, parent=obj.GetUp(), pred=obj.GetPred())
+                
+                # Reinsert the new object into the hierarchy at the original position
+                doc.InsertObject(new_obj, parent=original_parent, pred=original_pred)
 
         # Remove the original object
+        doc.AddUndo(c4d.UNDOTYPE_DELETE, obj)
         obj.Remove()
 
     doc.EndUndo()  # End recording undos
