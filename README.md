@@ -2,11 +2,18 @@
 
 A collection of scripts — written by hand or with AI assistance — to automate Windows, Deadline, and repetitive tasks in Cinema 4D.
 
-Everything here is small, self-contained and meant to be dropped straight into a script folder or double-clicked. Nothing needs installing.
+Everything here is small and self-contained. The scripts are meant to be dropped straight into a script folder or double-clicked; the one plugin is the exception and installs properly.
+
+```
+cinema4d/   Python scripts, run from Extensions → User Scripts
+windows/    batch and command files, double-click to run
+plugins/    installs to the C4D plugins folder, not library\scripts
+docs/       API notes worth reading before writing new C4D tooling
+```
 
 ---
 
-## Cinema 4D scripts (Python)
+## `cinema4d/` — Cinema 4D scripts (Python)
 
 Run from **Extensions → User Scripts**. See [Installing the Python scripts](#installing-the-python-scripts) below.
 
@@ -38,9 +45,9 @@ Cinema 4D's built-in command collapses a multi-object selection into a single ob
 
 ---
 
-## Plugins
+## `plugins/` — Plugins
 
-### `plugins/chroma_utilities/`
+### `chroma_utilities/`
 
 A background listener that starts with Cinema 4D and runs for the whole session — no button, nothing to launch. It renames a generator after the object you put inside it, so an Alt-clicked Extrude stops being called `Extrude`; it names Spline Text and MoText objects after the first few words of their own text, keeping up as you edit; and it turns C4D's `Light.1` duplicate suffix into a proper `Light_02`, taking matching children with it.
 
@@ -50,9 +57,9 @@ Installs to `plugins\`, not `library\scripts\`.
 
 ---
 
-## Windows / pipeline utilities
+## `windows/` — Windows / pipeline utilities
 
-Double-click to run. All of them prompt for their input, so there are no arguments to remember.
+Double-click to run. All of them prompt for their input, so there are no arguments to remember. `C4D_migration.bat` lives here rather than under `cinema4d/` because it's a Windows batch file that happens to move a C4D install around — nothing in it runs inside Cinema 4D.
 
 ### `C4D_migration.bat` — legacy
 
@@ -84,7 +91,7 @@ Same, but suspends to standby instead of shutting down, via `powrprof.dll,SetSus
 
 ## Installing the Python scripts
 
-Drop the `.py` files into your Cinema 4D script folder:
+Drop the `.py` files from `cinema4d/` into your Cinema 4D script folder:
 
 ```
 %APPDATA%\Maxon\Maxon Cinema 4D 2026_<hash>\library\scripts\
