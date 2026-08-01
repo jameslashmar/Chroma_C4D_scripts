@@ -6,11 +6,57 @@ A background listener for Cinema 4D. It starts when C4D starts, watches the acti
 
 ## What it does
 
-**Generators inherit their child's name.** Alt-click a generator in the menu or toolbar and C4D inserts it as the parent of your selection — the new Extrude, Cloner, Sweep or Symmetry then takes the name of the object beneath it instead of staying called `Extrude`. It also fires if you create the generator empty and drag a child into it afterwards, since it watches for the result rather than for the click.
+Three things, each independently switchable:
 
-**Text objects name themselves after their text.** A Spline Text or MoText object is renamed to the first four words of its own text, and keeps up as you edit. `"Welcome to the show tonight"` becomes `Welcome to the show`.
+| | Feature | Setting |
+|---|---|---|
+| 1 | Generators inherit their child's name | `AUTO_NAME_GENERATORS` |
+| 2 | Text objects name themselves after their text | `AUTO_NAME_TEXT` |
+| 3 | Duplicates count up instead of gaining `.1` | `AUTO_INCREMENT` |
 
-**Duplicates count up instead of gaining `.1`.** C4D names a copy `Light.1`; this makes it `Light_02`. However the original was numbered, the result normalises onto the same underscore form, and direct children carrying the parent's number follow it up — so duplicating `Camera 02` with a `target 02` inside gives `Camera_03` containing `target_03`.
+---
+
+### 1. Generators inherit their child's name
+
+Alt-click a generator in the menu or toolbar and C4D inserts it as the parent of your selection. The new Extrude, Cloner, Sweep or Symmetry then takes the name of the object beneath it, instead of staying called `Extrude`.
+
+- **Any generator, no list to maintain.** The rule is "default-named object that has a child", so it works for object types it has never heard of, including third-party ones.
+- **Named from the first child.** If several objects go in at once, the first child wins.
+- **It watches for the result, not the click.** There's no hook for a modified click in the C4D API, so instead it looks for a default-named object that has acquired a child. That means it fires however the object got there.
+- **Late children count.** Create the generator empty, drag a spline in ten minutes later, and it still names it. Objects created during the session stay eligible until they've been named.
+
+| you make | containing | it becomes |
+|---|---|---|
+| `Extrude` | `Logo Outline` | `Logo Outline` |
+| `Cloner` | `Brick` | `Brick` |
+| `Symmetry` | `Wing L` | `Wing L` |
+
+### 2. Text objects name themselves after their text
+
+A Spline Text or MoText object is renamed to the first few words of its own text.
+
+- **Four words by default** (`TEXT_WORD_COUNT`), capped at 32 characters (`TEXT_MAX_CHARS`), so a long first word can't produce an unreadable name.
+- **It keeps up.** Edit the text and the name follows, because the plugin still owns that name. Type over the name yourself and it stops.
+- **Whitespace is collapsed**, so multi-line text produces a single clean name rather than one containing line breaks.
+- **Empty text changes nothing** — it won't blank a name out while you're mid-edit.
+
+| text | name |
+|---|---|
+| `Welcome to the show tonight` | `Welcome to the show` |
+| `Chroma` | `Chroma` |
+
+MoText's text parameter isn't exposed as a named constant in the 2026 Python SDK, so it's probed rather than assumed — see [Known limitations](#known-limitations).
+
+### 3. Duplicates count up instead of gaining `.1`
+
+C4D names a copy `Light.1`. This makes it `Light_02`.
+
+- **Normalises onto one form.** However the original was numbered — space, underscore, hyphen, or not at all — the result is `stem_NN`.
+- **Only the first run of digits counts.** `cam 19-2` becomes `cam_20`, not `cam 19-3`.
+- **Padded to at least two digits** (`INCREMENT_PADDING`), so the second copy is `_02` and sorting stays sane. Wider existing numbers keep their width.
+- **Matching children follow the parent up.** Duplicating `Camera 02` that contains `target 02` gives `Camera_03` containing `target_03`, so a rig's internal numbering stays consistent.
+- **It won't create a clash.** If the next number is already taken it keeps counting until it finds a free one.
+- **Digit-only names are left alone.** An object called `2001` stays `2001.1` rather than being mangled into something meaningless.
 
 | duplicate of | becomes |
 |---|---|
@@ -19,15 +65,28 @@ A background listener for Cinema 4D. It starts when C4D starts, watches the acti
 | `Camera 02` | `Camera_03` |
 | `cam 19-2` | `cam_20` |
 
-Names that are only digits are left alone, and it counts past any name already in use rather than creating a clash.
+The separator is `INCREMENT_SEPARATOR`, so set it to `""` or `"-"` if you'd rather have `Light02` or `Light-02`.
+
+---
+
+## How the three interact
+
+Only one of them ever renames a given object on a given pass, in this order:
+
+1. Generator naming
+2. Text naming
+3. Increment
+
+The increment runs last and only if nothing more specific claimed the name — a duplicated default-named Extrude is more useful taking its child's name than becoming `Extrude_02`.
 
 ## It won't fight you
 
-The rule for both features is the same: it only touches a name that is **still the default** for that object type, or one **it assigned itself**. The moment you rename something by hand, it backs off that object permanently.
+The rule for all three is the same: it only touches a name that is **still the default** for that object type, or one **it assigned itself**. The moment you rename something by hand, it backs off that object permanently.
 
-The last name it assigned is stored in the object's own container under the plugin id, so ownership survives saving and reloading the scene. Default names are read from a throwaway instance of the type rather than compared against a hardcoded English list, so it works in any interface language.
-
-It also takes a snapshot when it first sees a document and leaves everything in that snapshot alone. Opening an old scene full of default-named Extrudes won't set off a mass rename — only objects created after the document was opened are eligible.
+- **Ownership survives save and reload.** The last name it assigned is stored in the object's own container under the plugin id, so reopening a scene doesn't reset who owns what.
+- **It works in any interface language.** Default names are read from a throwaway instance of the type rather than compared against a hardcoded list of English names.
+- **Existing scenes are left alone.** It snapshots each document when it first sees it and never touches anything in that snapshot. Opening an old scene full of default-named Extrudes won't set off a mass rename — only objects created after the document was opened are eligible.
+- **Your own renames aren't undone.** Because a hand-typed name breaks ownership immediately, there's no tug-of-war where you rename something and it renames it back a third of a second later.
 
 ## Settings
 
