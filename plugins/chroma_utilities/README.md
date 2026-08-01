@@ -4,68 +4,21 @@ A background listener for Cinema 4D. It starts when C4D starts, watches the acti
 
 **Plugin ID:** `1069542` (registered with Maxon) · **Requires:** Cinema 4D 2026, Python 3.11
 
-## What it does
+## The three features
 
-Three things, each independently switchable:
+Each has its own page, and each can be switched off on its own.
 
-| | Feature | Setting |
-|---|---|---|
-| 1 | Generators inherit their child's name | `AUTO_NAME_GENERATORS` |
-| 2 | Text objects name themselves after their text | `AUTO_NAME_TEXT` |
-| 3 | Duplicates count up instead of gaining `.1` | `AUTO_INCREMENT` |
+### [Parent renamer](docs/generator-parent-renamer.md) · `AUTO_NAME_GENERATORS`
 
----
+A generator takes the name of the object you put inside it. Alt-click Extrude on a spline called `Logo Outline` and you get an Extrude called `Logo Outline`, not `Extrude`. Works for any generator, and for children dragged in later.
 
-### 1. Generators inherit their child's name
+### [Text object renamer](docs/text-object-renamer.md) · `AUTO_NAME_TEXT`
 
-Alt-click a generator in the menu or toolbar and C4D inserts it as the parent of your selection. The new Extrude, Cloner, Sweep or Symmetry then takes the name of the object beneath it, instead of staying called `Extrude`.
+Spline Text and MoText objects name themselves after the first four words of their own text, and keep up as you edit. `Welcome to the show tonight` → `Welcome to the show`.
 
-- **Any generator, no list to maintain.** The rule is "default-named object that has a child", so it works for object types it has never heard of, including third-party ones.
-- **Named from the first child.** If several objects go in at once, the first child wins.
-- **It watches for the result, not the click.** There's no hook for a modified click in the C4D API, so instead it looks for a default-named object that has acquired a child. That means it fires however the object got there.
-- **Late children count.** Create the generator empty, drag a spline in ten minutes later, and it still names it. Objects created during the session stay eligible until they've been named.
+### [Auto-enumerator](docs/auto-enumerator.md) · `AUTO_INCREMENT`
 
-| you make | containing | it becomes |
-|---|---|---|
-| `Extrude` | `Logo Outline` | `Logo Outline` |
-| `Cloner` | `Brick` | `Brick` |
-| `Symmetry` | `Wing L` | `Wing L` |
-
-### 2. Text objects name themselves after their text
-
-A Spline Text or MoText object is renamed to the first few words of its own text.
-
-- **Four words by default** (`TEXT_WORD_COUNT`), capped at 32 characters (`TEXT_MAX_CHARS`), so a long first word can't produce an unreadable name.
-- **It keeps up.** Edit the text and the name follows, because the plugin still owns that name. Type over the name yourself and it stops.
-- **Whitespace is collapsed**, so multi-line text produces a single clean name rather than one containing line breaks.
-- **Empty text changes nothing** — it won't blank a name out while you're mid-edit.
-
-| text | name |
-|---|---|
-| `Welcome to the show tonight` | `Welcome to the show` |
-| `Chroma` | `Chroma` |
-
-MoText's text parameter isn't exposed as a named constant in the 2026 Python SDK, so it's probed rather than assumed — see [Known limitations](#known-limitations).
-
-### 3. Duplicates count up instead of gaining `.1`
-
-C4D names a copy `Light.1`. This makes it `Light_02`.
-
-- **Normalises onto one form.** However the original was numbered — space, underscore, hyphen, or not at all — the result is `stem_NN`.
-- **Only the first run of digits counts.** `cam 19-2` becomes `cam_20`, not `cam 19-3`.
-- **Padded to at least two digits** (`INCREMENT_PADDING`), so the second copy is `_02` and sorting stays sane. Wider existing numbers keep their width.
-- **Matching children follow the parent up.** Duplicating `Camera 02` that contains `target 02` gives `Camera_03` containing `target_03`, so a rig's internal numbering stays consistent.
-- **It won't create a clash.** If the next number is already taken it keeps counting until it finds a free one.
-- **Digit-only names are left alone.** An object called `2001` stays `2001.1` rather than being mangled into something meaningless.
-
-| duplicate of | becomes |
-|---|---|
-| `Light` | `Light_02` |
-| `Light_02` | `Light_03` |
-| `Camera 02` | `Camera_03` |
-| `cam 19-2` | `cam_20` |
-
-The separator is `INCREMENT_SEPARATOR`, so set it to `""` or `"-"` if you'd rather have `Light02` or `Light-02`.
+Duplicates count up properly instead of collecting C4D's `.1` suffix. `Light` → `Light_02` → `Light_03`, with matching children renumbered alongside their parent. Replaces Romain Rosi's Smart Increment — don't run both.
 
 ---
 
