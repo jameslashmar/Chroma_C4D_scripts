@@ -48,7 +48,11 @@ Installs to `plugins\`, not `library\scripts\`.
 
 Double-click to run. All of them prompt for their input, so there are no arguments to remember.
 
-### `C4D_migration.bat`
+### `C4D_migration.bat` — legacy
+
+> **Superseded.** A cross-platform replacement is in development: **C4D Migrator**, a Python tool that auto-detects installed C4D versions, reads `version.h` for the real version numbers, skips C++ plugins on major-version migrations because they won't load anyway, discovers external plugin folders from `plugins.json`, lets you opt in and out of each category from a UI, and writes an HTML report of what it did. This batch script is preserved here, and in that project's `docs/`, as the thing it replaces.
+>
+> Still fine to use on Windows in the meantime — it works, it just hardcodes a lot.
 
 Migrates a Cinema 4D setup from one release to the next.
 
