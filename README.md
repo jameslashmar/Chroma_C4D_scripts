@@ -60,9 +60,15 @@ C4D's built-in command collapses a multi-object selection into a single object �
 
 ### `chroma_utilities/`
 
-A background listener that starts with Cinema 4D and runs for the whole session — no button, nothing to launch. It renames a generator after the object you put inside it, so an Alt-clicked Extrude stops being called `Extrude`; it names Spline Text and MoText objects after the first few words of their own text, keeping up as you edit; and it turns C4D's `Light.1` duplicate suffix into a proper `Light_02`, taking matching children with it.
+A background listener that starts with Cinema 4D and runs for the whole session — no button, nothing to launch. It does three things, each switchable on its own.
 
-It only ever touches a name that's still the type default or one it assigned itself, so a hand-typed name is safe, and it ignores everything that was already in a document when it opened. Settings are constants at the top of the `.pyp`. See [its README](plugins/chroma_utilities/README.md) for behaviour, install and limitations.
+**Parent renamer.** A generator takes the name of the object you put inside it. Alt-click Extrude on a spline called `Logo Outline` and you get an Extrude called `Logo Outline`, not `Extrude`. Works for any generator type, and for children dragged in later — it watches for the result rather than for the click.
+
+**Text object renamer.** Spline Text and MoText objects name themselves after the first four words of their own text, and keep up as you edit. `Welcome to the show tonight` becomes `Welcome to the show`.
+
+**Auto-enumerator.** Duplicates count up properly instead of collecting C4D's `.1` suffix: `Light` → `Light_02` → `Light_03`. Whatever numbering the original used is normalised onto the same form, and matching children are renumbered alongside their parent, so duplicating `Camera 02` containing `target 02` gives `Camera_03` containing `target_03`. Replaces Romain Rosi's Smart Increment — don't run both.
+
+All three only ever touch a name that's still the type default or one the plugin assigned itself, so a hand-typed name is safe, and everything already in a document when it opened is left alone. Settings are constants at the top of the `.pyp`. See [its README](plugins/chroma_utilities/README.md) for the full rules, install and limitations.
 
 Installs to `plugins\`, not `library\scripts\`.
 

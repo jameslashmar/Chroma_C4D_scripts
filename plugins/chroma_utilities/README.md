@@ -4,21 +4,78 @@ A background listener for Cinema 4D. It starts when C4D starts, watches the acti
 
 **Plugin ID:** `1069542` (registered with Maxon) · **Requires:** Cinema 4D 2026, Python 3.11
 
-## The three features
+Three features, each independently switchable:
 
-Each has its own page, and each can be switched off on its own.
+| | Feature | Setting |
+|---|---|---|
+| 1 | [Parent renamer](#1-parent-renamer) — generators inherit their child's name | `AUTO_NAME_GENERATORS` |
+| 2 | [Text object renamer](#2-text-object-renamer) — text objects name themselves after their text | `AUTO_NAME_TEXT` |
+| 3 | [Auto-enumerator](#3-auto-enumerator) — duplicates count up instead of gaining `.1` | `AUTO_INCREMENT` |
 
-### [Parent renamer](docs/generator-parent-renamer.md) · `AUTO_NAME_GENERATORS`
+---
 
-A generator takes the name of the object you put inside it. Alt-click Extrude on a spline called `Logo Outline` and you get an Extrude called `Logo Outline`, not `Extrude`. Works for any generator, and for children dragged in later.
+## 1. Parent renamer
 
-### [Text object renamer](docs/text-object-renamer.md) · `AUTO_NAME_TEXT`
+Alt-click a generator in the menu or toolbar and C4D inserts it as the parent of your selection. The new Extrude, Cloner, Sweep or Symmetry then takes the name of the object beneath it, instead of staying called `Extrude`.
 
-Spline Text and MoText objects name themselves after the first four words of their own text, and keep up as you edit. `Welcome to the show tonight` → `Welcome to the show`.
+| you make | containing | it becomes |
+|---|---|---|
+| `Extrude` | `Logo Outline` | `Logo Outline` |
+| `Cloner` | `Brick` | `Brick` |
+| `Symmetry` | `Wing L` | `Wing L` |
 
-### [Auto-enumerator](docs/auto-enumerator.md) · `AUTO_INCREMENT`
+**It watches for the result, not the click.** There is no hook in the C4D API for "user clicked with a modifier held", so intercepting the Alt-click isn't possible. Instead it looks for a **default-named object that has acquired a child** — which is what an Alt-click produces. That turns out to be the better rule, because it fires however the object got there: Alt-clicking a generator, dragging an object into an existing one, or any script that reparents something under a fresh generator.
 
-Duplicates count up properly instead of collecting C4D's `.1` suffix. `Light` → `Light_02` → `Light_03`, with matching children renumbered alongside their parent. Replaces Romain Rosi's Smart Increment — don't run both.
+- **Any generator, no list to maintain.** The condition is "still has its default name, and has at least one child", so it works for types the plugin has never heard of, including third-party ones.
+- **Named from the first child**, if several go in at once.
+- **Late children count.** Create the generator empty, drag a spline in ten minutes later, and it still names it.
+- **Once only.** After renaming, the name is no longer the type default, so it won't chase the child if you rename that later.
+
+Nulls are included by default, since wrapping something in a null and inheriting the name is usually what you want. To exempt them, or any other type:
+
+```python
+SKIP_GENERATOR_TYPES = {c4d.Onull}
+```
+
+## 2. Text object renamer
+
+A Spline Text or MoText object is renamed to the first few words of its own text, so an Object Manager full of `Text`, `Text.1`, `Text.2` becomes readable at a glance.
+
+| text | name |
+|---|---|
+| `Welcome to the show tonight` | `Welcome to the show` |
+| `Chroma` | `Chroma` |
+
+- **Four words by default** (`TEXT_WORD_COUNT`), capped at 32 characters (`TEXT_MAX_CHARS`) so a single very long word can't produce an unreadable name.
+- **Whitespace is collapsed**, so multi-line text gives one clean single-line name.
+- **It keeps up.** Edit the text and the name follows, because the plugin still owns that name.
+- **Empty text changes nothing** — it won't blank a name out while you're mid-edit.
+
+**MoText's text parameter isn't exposed as a named constant in the 2026 Python SDK.** Rather than hardcode a guessed id, the plugin tries the ids in `TEXT_PARAM_CANDIDATES` (starting with `PRIM_TEXT_TEXT`) and uses the first that returns a non-empty string. If none work it prints one line naming the object and its type id rather than failing silently — run `[x for x in op.GetDataInstance()]` on that object to find the string parameter's id, and add it to the tuple.
+
+## 3. Auto-enumerator
+
+C4D names a copy `Light.1`, then `Light.2`, and a copy of *that* `Light.1.1`. This turns them into a proper sequence.
+
+| duplicate of | becomes |
+|---|---|
+| `Light` | `Light_02` |
+| `Light_02` | `Light_03` |
+| `Camera 02` | `Camera_03` |
+| `cam 19-2` | `cam_20` |
+
+- **Normalises onto one form.** However the original was numbered — space, underscore, hyphen, or not at all — the result is `stem_NN`.
+- **Only the first run of digits counts.** `cam 19-2` becomes `cam_20`, not `cam 19-3`.
+- **Padded to at least two digits** (`INCREMENT_PADDING`), so names sort correctly. A wider existing number keeps its width: `Sweep_099` → `Sweep_100`.
+- **Unnumbered originals start at 02**, since the original is conceptually 01.
+- **It won't create a clash.** If the next number is taken it keeps counting, so duplicating `Light` twice gives `Light_02` and `Light_03`.
+- **Digit-only names are left alone.** An object called `2001` stays `2001.1` rather than being mangled.
+
+**Children follow the parent.** Direct children carrying the same number as the parent are renumbered to match, so duplicating a `Camera 02` containing a `target 02` gives `Camera_03` containing `target_03` — a rig's internal numbering stays consistent. Children with a different number, or none, are left alone.
+
+The separator is `INCREMENT_SEPARATOR`: set it to `""` or `"-"` for `Light02` or `Light-02`.
+
+**This replaces [Smart Increment](https://www.romainrosi.com) by Romain Rosi**, including its matching-children behaviour, so don't run both — they'd each try to rename the same new object. The difference is output format: Smart Increment preserves the original's numbering style (`Camera 02` → `Camera 03`), this normalises onto the underscore form.
 
 ---
 
@@ -26,11 +83,11 @@ Duplicates count up properly instead of collecting C4D's `.1` suffix. `Light` �
 
 Only one of them ever renames a given object on a given pass, in this order:
 
-1. Generator naming
-2. Text naming
-3. Increment
+1. Parent renamer
+2. Text object renamer
+3. Auto-enumerator
 
-The increment runs last and only if nothing more specific claimed the name — a duplicated default-named Extrude is more useful taking its child's name than becoming `Extrude_02`.
+The enumerator runs last and only if nothing more specific claimed the name — a duplicated default-named Extrude with a child in it is more useful taking that child's name than becoming `Extrude_02`.
 
 ## It won't fight you
 
@@ -89,9 +146,9 @@ Object identity comes from `GetGUID()`, which is derived from the object's marke
 ## Known limitations
 
 - **Renames are not undoable.** They happen outside any undo block, because opening one from a background message handler can interleave badly with whatever the user is doing. Ctrl+Z won't put an auto-assigned name back.
-- **MoText's text parameter is probed, not assumed.** The 2026 Python SDK exposes no named constant for it, so the plugin tries `PRIM_TEXT_TEXT` and reports once if it comes back empty. If that happens, find the string parameter's id and add it to `TEXT_PARAM_CANDIDATES`.
+- **MoText's text parameter is probed, not assumed** — see feature 2 above.
 - **It walks the whole object tree every tick.** Fine on ordinary scenes; on a very heavy one this is the first thing to optimise, by gating the walk on a document dirty check.
 
 ## Credit
 
-The always-on `MessageData` + timer + re-entrancy-guard pattern follows [Smart Increment](https://www.romainrosi.com) by Romain Rosi, which uses it to renumber duplicated objects.
+The always-on `MessageData` + timer + re-entrancy-guard pattern follows Smart Increment by Romain Rosi, which uses it to renumber duplicated objects.
