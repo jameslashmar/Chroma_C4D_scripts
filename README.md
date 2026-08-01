@@ -24,6 +24,12 @@ The reverse lookup. Select node(s) in the XPresso editor, run the script, and it
 
 It expands collapsed hierarchy on the way, so the target is actually visible on screen rather than selected somewhere inside a folded group. Handles multiple selected nodes across multiple graphs at once, de-duplicates targets, and prints the full path of everything it selected.
 
+### `instances_from_selected.py`
+
+Turns every selected object into an Instance of itself, named `<original>_instance`.
+
+Each instance is inserted as a sibling directly after its source, so the hierarchy stays readable rather than everything piling up at the bottom of the Object Manager. It copies the source's relative **and** frozen P/R/S, which means the instance lands exactly on top of the original instead of at the parent's origin — the part that's easy to get wrong by hand. The whole batch is one undo step, and the selection is swapped to the new instances afterwards so you can move them straight away.
+
 ### `connect_&_delete_multiple_selected_objects.py`
 
 Runs **Connect Objects + Delete** on each selected object individually, rather than merging the whole selection into one mesh.
