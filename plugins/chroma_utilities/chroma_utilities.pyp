@@ -25,9 +25,13 @@ PLUGIN_ID = 1069542
 
 AUTO_NAME_GENERATORS = True   # feature 1
 AUTO_NAME_TEXT = True         # feature 2
+AUTO_INCREMENT = True         # feature 3
 
-TEXT_WORD_COUNT = 3           # how many words of the text to use as the name
+TEXT_WORD_COUNT = 4           # how many words of the text to use as the name
 TEXT_MAX_CHARS = 32           # hard cap on the generated name
+
+INCREMENT_SEPARATOR = "_"     # what sits between the stem and the number
+INCREMENT_PADDING = 2         # minimum digits, so the second copy is _02
 
 # Types that should keep their default name even when they gain a child.
 # Add c4d.Onull here if you'd rather nulls stayed called "Null".
@@ -43,6 +47,12 @@ VERBOSE = False               # print every rename
 TEXT_PARAM_CANDIDATES = (c4d.PRIM_TEXT_TEXT,)
 
 TEXT_TYPES = (c4d.Osplinetext, c4d.Omgtext)
+
+# "Light.1" -> stem "Light". C4D's own suffix for a duplicate.
+_DUPLICATE_RE = re.compile(r'^(.*?)\.\d+$')
+
+# "Camera 02" -> ("Camera", "02") · "cam 19-2" -> ("cam", "19-2") · "Light" -> no match
+_TRAILING_NUM_RE = re.compile(r'^(.*?)[\s_\-]*(\d+(?:[\s\-]\d+)*)$')
 
 
 class ChromaUtilities(c4d.plugins.MessageData):
@@ -231,6 +241,87 @@ class ChromaUtilities(c4d.plugins.MessageData):
             print("[Chroma Utilities] text -> '%s'" % new_name)
         return True
 
+    # -- feature 3: duplicates count up instead of gaining ".1" -------------
+    #
+    # C4D names a duplicate "Light.1". We turn that into "Light_02", and
+    # normalise however the original was numbered onto the same underscore
+    # form: "Camera 02" -> "Camera_03", "cam 19-2" -> "cam_20".
+
+    def _next_name(self, name, taken):
+        dup = _DUPLICATE_RE.match(name)
+        if not dup:
+            return None
+        original = dup.group(1)
+
+        trailing = _TRAILING_NUM_RE.match(original)
+        if trailing:
+            stem = trailing.group(1)
+            # Only the first run of digits counts - "19-2" counts up as 19.
+            first = re.match(r'\d+', trailing.group(2)).group(0)
+            width = max(INCREMENT_PADDING, len(first))
+            number = int(first) + 1
+        else:
+            stem = original
+            width = INCREMENT_PADDING
+            number = 2
+
+        stem = stem.rstrip(" _-")
+        if not stem:
+            return None   # a name that is only digits - leave it alone
+
+        candidate = "%s%s%s" % (stem, INCREMENT_SEPARATOR, str(number).zfill(width))
+        while candidate in taken:
+            number += 1
+            candidate = "%s%s%s" % (stem, INCREMENT_SEPARATOR, str(number).zfill(width))
+        return candidate
+
+    def _number_of(self, name):
+        """The first run of digits in a name's trailing number, if any."""
+        trailing = _TRAILING_NUM_RE.match(_DUPLICATE_RE.sub(r'\1', name))
+        if not trailing:
+            return None
+        return re.match(r'\d+', trailing.group(2)).group(0)
+
+    def _renumber_children(self, parent, old_number, new_number, taken):
+        """
+        Direct children carrying the same number as the parent follow it up.
+        Duplicating "Camera 02" with a "target 02" inside gives "Camera_03"
+        and "target_03", not "Camera_03" containing "target 02".
+        """
+        if old_number is None or new_number is None:
+            return
+
+        child = parent.GetDown()
+        while child:
+            name = child.GetName()
+            base = _DUPLICATE_RE.sub(r'\1', name)
+            trailing = _TRAILING_NUM_RE.match(base)
+            if trailing and re.match(r'\d+', trailing.group(2)).group(0) == old_number:
+                stem = trailing.group(1).rstrip(" _-")
+                if stem:
+                    new_name = "%s%s%s" % (stem, INCREMENT_SEPARATOR, new_number)
+                    if new_name != name:
+                        child.SetName(new_name)
+                        taken.add(new_name)
+                        taken.discard(name)
+            child = child.GetNext()
+
+    def _increment(self, op, taken):
+        name = op.GetName()
+        new_name = self._next_name(name, taken)
+        if new_name is None:
+            return False
+
+        old_number = self._number_of(name)
+        op.SetName(new_name)
+        taken.add(new_name)
+        taken.discard(name)
+        self._renumber_children(op, old_number, self._number_of(new_name), taken)
+
+        if VERBOSE:
+            print("[Chroma Utilities] '%s' -> '%s'" % (name, new_name))
+        return True
+
     # -- the tick -----------------------------------------------------------
 
     def _tick(self):
@@ -248,6 +339,7 @@ class ChromaUtilities(c4d.plugins.MessageData):
             return
 
         changed = False
+        taken = set(op.GetName() for _, op in objects)
 
         for key, op in objects:
             # Objects that predate us are off-limits, unless we own the name.
@@ -255,10 +347,19 @@ class ChromaUtilities(c4d.plugins.MessageData):
             if established:
                 continue
 
+            acted = False
             if AUTO_NAME_GENERATORS and self._name_generator(op):
-                changed = True
+                acted = True
             if AUTO_NAME_TEXT and self._name_text_object(op):
-                changed = True
+                acted = True
+
+            # Only fall through to the increment if nothing more specific
+            # claimed the name - a duplicated default-named Extrude is better
+            # off taking its child's name than becoming "Extrude_02".
+            if AUTO_INCREMENT and not acted and self._increment(op, taken):
+                acted = True
+
+            changed = changed or acted
 
         # The baseline deliberately does not grow. It records what was in the
         # document when we opened it, and nothing else - so an object created

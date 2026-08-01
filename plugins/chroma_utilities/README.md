@@ -8,7 +8,18 @@ A background listener for Cinema 4D. It starts when C4D starts, watches the acti
 
 **Generators inherit their child's name.** Alt-click a generator in the menu or toolbar and C4D inserts it as the parent of your selection — the new Extrude, Cloner, Sweep or Symmetry then takes the name of the object beneath it instead of staying called `Extrude`. It also fires if you create the generator empty and drag a child into it afterwards, since it watches for the result rather than for the click.
 
-**Text objects name themselves after their text.** A Spline Text or MoText object is renamed to the first three words of its own text, and keeps up as you edit. `"Welcome to the show"` becomes `Welcome to the`.
+**Text objects name themselves after their text.** A Spline Text or MoText object is renamed to the first four words of its own text, and keeps up as you edit. `"Welcome to the show tonight"` becomes `Welcome to the show`.
+
+**Duplicates count up instead of gaining `.1`.** C4D names a copy `Light.1`; this makes it `Light_02`. However the original was numbered, the result normalises onto the same underscore form, and direct children carrying the parent's number follow it up — so duplicating `Camera 02` with a `target 02` inside gives `Camera_03` containing `target_03`.
+
+| duplicate of | becomes |
+|---|---|
+| `Light` | `Light_02` |
+| `Light_02` | `Light_03` |
+| `Camera 02` | `Camera_03` |
+| `cam 19-2` | `cam_20` |
+
+Names that are only digits are left alone, and it counts past any name already in use rather than creating a clash.
 
 ## It won't fight you
 
@@ -26,8 +37,11 @@ Constants at the top of the `.pyp`:
 |---|---|---|
 | `AUTO_NAME_GENERATORS` | `True` | feature 1 on/off |
 | `AUTO_NAME_TEXT` | `True` | feature 2 on/off |
-| `TEXT_WORD_COUNT` | `3` | words of text to use as the name |
+| `AUTO_INCREMENT` | `True` | feature 3 on/off |
+| `TEXT_WORD_COUNT` | `4` | words of text to use as the name |
 | `TEXT_MAX_CHARS` | `32` | hard cap on a generated name |
+| `INCREMENT_SEPARATOR` | `"_"` | what sits between stem and number |
+| `INCREMENT_PADDING` | `2` | minimum digits, so the second copy is `_02` |
 | `SKIP_GENERATOR_TYPES` | `set()` | types that keep their default name — add `c4d.Onull` if you'd rather nulls stayed called `Null` |
 | `TIMER_MS` | `300` | how often it looks |
 | `VERBOSE` | `False` | print every rename |
@@ -41,6 +55,18 @@ Drop the `chroma_utilities` folder into your plugins directory:
 ```
 
 Restart Cinema 4D. The console prints `[Chroma Utilities] listening` on load.
+
+## Building a `.pypv`
+
+The source `.pyp` runs as-is. To ship a compiled copy instead, encrypt it with `c4dpy`, which ships with every C4D install — no GUI needed:
+
+```
+c4dpy stub.py -g_encryptPypFile="C:\path\to\chroma_utilities.pyp"
+```
+
+The positional `stub.py` is required but its contents don't matter (`pass` is enough) — encryption is a side effect of the flag. The `.pypv` lands **next to the input**, so copy it to the plugin folder and remove the `.pyp`; ship one or the other, not both.
+
+**Don't gate the build on the exit code.** `c4dpy` boots the whole of C4D, so an unrelated plugin can crash at *shutdown* long after encryption succeeded — a `0xC0000409` with a valid `.pypv` on disk is normal. Confirm by the `... encrypted to file:///....pypv` log line and the file's timestamp. A real failure looks different: `0xC0000005` and no `.pypv` produced at all.
 
 ## How it works
 

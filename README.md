@@ -36,7 +36,7 @@ Cinema 4D's built-in command collapses a multi-object selection into a single ob
 
 ### `plugins/chroma_utilities/`
 
-A background listener that starts with Cinema 4D and runs for the whole session — no button, nothing to launch. It renames a generator after the object you put inside it, so an Alt-clicked Extrude stops being called `Extrude`, and it names Spline Text and MoText objects after the first few words of their own text, keeping up as you edit.
+A background listener that starts with Cinema 4D and runs for the whole session — no button, nothing to launch. It renames a generator after the object you put inside it, so an Alt-clicked Extrude stops being called `Extrude`; it names Spline Text and MoText objects after the first few words of their own text, keeping up as you edit; and it turns C4D's `Light.1` duplicate suffix into a proper `Light_02`, taking matching children with it.
 
 It only ever touches a name that's still the type default or one it assigned itself, so a hand-typed name is safe, and it ignores everything that was already in a document when it opened. Settings are constants at the top of the `.pyp`. See [its README](plugins/chroma_utilities/README.md) for behaviour, install and limitations.
 

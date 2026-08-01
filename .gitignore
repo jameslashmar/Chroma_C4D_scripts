@@ -1,0 +1,2 @@
+# Compiled plugin binaries - ship these, do not track them
+*.pypv
