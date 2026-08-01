@@ -1,6 +1,6 @@
 # XPresso scripting notes — Cinema 4D 2026
 
-Notes gathered while writing `find_xpresso_node.py` and `select_xpresso_reference.py` against Cinema 4D 2026 / Python 3.11 (`c4d` classic API, `c4d.modules.graphview`).
+Notes gathered while writing `find_xpresso_node-OM2XP.py` and `select_xpresso_reference-XP2OM.py` against Cinema 4D 2026 / Python 3.11 (`c4d` classic API, `c4d.modules.graphview`).
 
 These are the things that went wrong repeatedly. The API surface is not what autocomplete or older forum posts suggest, and most of these fail *silently* — the script runs, finds nothing, and looks broken rather than incomplete. Worth reading before writing any new XPresso tooling.
 
