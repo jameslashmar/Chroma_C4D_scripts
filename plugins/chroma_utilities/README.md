@@ -2,7 +2,7 @@
 
 A background listener for Cinema 4D. It starts when C4D starts, watches the active document for the whole session, and names things so you don't have to. There's no button and nothing to launch.
 
-**Version:** 1.3.1 · **Plugin ID:** `1069542` (registered with Maxon) · **Requires:** Cinema 4D 2026, Python 3.11
+**Version:** 1.3.2 · **Plugin ID:** `1069542` (registered with Maxon) · **Requires:** Cinema 4D 2026, Python 3.11
 
 Four features, each independently switchable:
 
@@ -84,7 +84,9 @@ Select several XPresso nodes, drag a connection onto a port of **one** of them, 
 
 C4D only ever wires the node you dropped on, even with a whole selection highlighted. This watches the graph's connections and reacts when a new one appears on a node that's part of a multi-node selection, then mirrors it — same source port, same destination port — onto every other selected node in that graph.
 
-**Matching the port across nodes** is done on the port's `MainID`/`SubID` pair, which is how "the same port" is identified on sibling nodes, rather than by name or index. The match is **exact** — a loose match on the main id alone picks up neighbouring parameters, which is how mirroring Scale can end up wiring Position and Rotation too. A newly created port is checked against the ids that were asked for and removed again if it isn't the right one, so a node is left untouched rather than wrongly wired. Nodes are named in the console by what they link to — `'Object' -> Cube_02` — because a graph full of nodes all called `Object` tells you nothing.
+**Matching the port across nodes** is done on the port's `MainID`/`SubID` pair, which is how "the same port" is identified on sibling nodes, rather than by name or index. The match is **exact** — a loose match on the main id alone picks up neighbouring parameters, which is how mirroring Scale can end up wiring Position and Rotation too. A newly created port is checked against the ids that were asked for and removed again if it isn't the right one, so a node is left untouched rather than wrongly wired.
+
+**Some nodes expose their whole parameter set from one `AddPort`** — ask a Display tag for Visibility and it can hand back every value on the tag. Every port that appears is counted, and anything beyond the single one requested is taken straight back off, so a node ends up with exactly one new port or none. If any of them can't be removed, the console says how many stayed. Nodes are named in the console by what they link to — `'Object' -> Cube_02` — because a graph full of nodes all called `Object` tells you nothing.
 
 Three rules, each chosen deliberately:
 
@@ -175,7 +177,7 @@ Drop the `chroma_utilities` folder into your plugins directory:
 Restart Cinema 4D. On load the console prints the version and which features are active, so you can tell at a glance whether you're running the build you think you are:
 
 ```
-[Chroma Utilities] v1.3.1 listening - parent renamer, text renamer, auto-enumerator, multi-wire, multi-unwire
+[Chroma Utilities] v1.3.2 listening - parent renamer, text renamer, auto-enumerator, multi-wire, multi-unwire
 ```
 
 If a feature is switched off it's absent from that list. `FAILED to register` in place of `listening` means the plugin loaded but C4D rejected the registration.

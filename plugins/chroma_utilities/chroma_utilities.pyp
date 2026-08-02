@@ -21,7 +21,7 @@ import traceback
 from c4d.modules import graphview
 
 PLUGIN_ID = 1069542
-VERSION = "1.3.1"   # keep in step with the VERSION file next to this script
+VERSION = "1.3.2"   # keep in step with the VERSION file next to this script
 
 # --- settings -------------------------------------------------------------
 
@@ -439,28 +439,57 @@ class ChromaUtilities(c4d.plugins.MessageData):
         candidates.append(main_id)
 
         for cid in candidates:
+            before = self._port_signature(node)
+
             try:
                 port = node.AddPort(c4d.GV_PORT_INPUT, cid,
                                     c4d.GV_PORT_FLAG_IS_VISIBLE, True)
             except Exception:
                 port = None
-            if port is None:
-                continue
 
-            # Verify we got the port we asked for. AddPort with a loosely
-            # specified id can hand back a neighbouring parameter - which is
-            # how a Scale mirror turned into Position, Rotation and Scale all
-            # being wired. If it's the wrong one, take it straight back off.
-            if port.GetMainID() == main_id and port.GetSubID() == sub_id:
-                return port
+            added = [p for p in (node.GetInPorts() or [])
+                     if (p.GetMainID(), p.GetSubID()) not in before]
 
             if MULTI_WIRE_DEBUG:
-                print("[Chroma Utilities]   asked for main=%d sub=%d, "
-                      "got main=%d sub=%d - removing"
-                      % (main_id, sub_id, port.GetMainID(), port.GetSubID()))
-            self._remove_port(node, port)
+                print("[Chroma Utilities]   AddPort(%s) -> %d new port(s): %s"
+                      % (cid, len(added),
+                         ", ".join("%d/%d" % (p.GetMainID(), p.GetSubID())
+                                   for p in added) or "-"))
+
+            # A tag or object can respond to one AddPort by exposing its whole
+            # parameter set - ask for Visibility and get every value on the
+            # tag. Anything beyond the single port we asked for is taken back
+            # off, so the node ends up with exactly one new port or none.
+            wanted = None
+            surplus = []
+            for p in added:
+                if wanted is None and p.GetMainID() == main_id and p.GetSubID() == sub_id:
+                    wanted = p
+                else:
+                    surplus.append(p)
+
+            if surplus:
+                kept = 0
+                for p in surplus:
+                    if not self._remove_port(node, p):
+                        kept += 1
+                print("[Chroma Utilities]   %s exposed %d extra port(s); "
+                      "%s" % (self._node_label(node), len(surplus),
+                              "removed them again" if not kept else
+                              "%d could not be removed" % kept))
+
+            if wanted is not None:
+                return wanted
+            if port is not None and not added:
+                # Port already existed and AddPort handed it back.
+                if port.GetMainID() == main_id and port.GetSubID() == sub_id:
+                    return port
 
         return None
+
+    def _port_signature(self, node):
+        return set((p.GetMainID(), p.GetSubID())
+                   for p in (node.GetInPorts() or []))
 
     def _node_label(self, node):
         """
@@ -698,12 +727,22 @@ class ChromaUtilities(c4d.plugins.MessageData):
                 self._wiring[key] = current
                 continue
 
+            appeared = current - previous
+            vanished = previous - current
+
+            if MULTI_WIRE_DEBUG and (appeared or vanished):
+                print("[Chroma Utilities] %s: %d connection(s) appeared, "
+                      "%d vanished" % (label, len(appeared), len(vanished)))
+                for conn in appeared:
+                    print("[Chroma Utilities]   + %s port %d/%d -> %s port %d/%d"
+                          % (conn[0], conn[1], conn[2], conn[3], conn[4], conn[5]))
+
             wired = 0
-            for conn in (current - previous):
+            for conn in appeared:
                 wired += self._mirror_connection(conn, nodes, label)
 
             if MULTI_WIRE_DISCONNECT:
-                for conn in (previous - current):
+                for conn in vanished:
                     wired += self._mirror_disconnection(conn, nodes, current, label)
 
             # Re-read after acting, so our own edits aren't mistaken for the
