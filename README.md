@@ -72,7 +72,7 @@ A background listener that starts with Cinema 4D and runs for the whole session 
 
 The three renamers only ever touch a name that's still the type default or one the plugin assigned itself, so a hand-typed name is safe, and everything already in a document when it opened is left alone. Settings are constants at the top of the `.pyp`. See [its README](plugins/chroma_utilities/README.md) for the full rules, install and limitations.
 
-Installs to `plugins\`, not `library\scripts\`.
+Installs to `plugins\`, not `library\scripts\`. Ships as a compiled `.pypv`; the `.pyp` source is kept private.
 
 ---
 

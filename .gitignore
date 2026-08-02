@@ -1,2 +1,2 @@
-# Compiled plugin binaries - ship these, do not track them
-*.pypv
+# Plugin source stays private - only the compiled .pypv ships
+*.pyp

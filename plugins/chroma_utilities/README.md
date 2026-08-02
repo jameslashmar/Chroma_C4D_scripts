@@ -158,6 +158,8 @@ Constants at the top of the `.pyp`:
 | `MULTI_WIRE_DISCONNECT` | `True` | mirror disconnections as well as connections |
 | `MULTI_WIRE_REMOVE_EMPTY_PORTS` | `"ask"` | `True` / `False` / `"ask"` — what to do with a port left empty by a mirrored disconnection |
 | `MULTI_WIRE_DEBUG` | `False` | print port ids, and list a node's actual ports when one can't be matched |
+
+Settings live in the source, so changing one means a rebuild — see [Source and building](#source-and-building).
 | `TEXT_WORD_COUNT` | `4` | words of text to use as the name |
 | `TEXT_MAX_CHARS` | `32` | hard cap on a generated name |
 | `INCREMENT_SEPARATOR` | `"_"` | what sits between stem and number |
@@ -168,7 +170,7 @@ Constants at the top of the `.pyp`:
 
 ## Install
 
-Drop the `chroma_utilities` folder into your plugins directory:
+Drop the `chroma_utilities` folder — containing `chroma_utilities.pypv` — into your plugins directory:
 
 ```
 %APPDATA%\Maxon\Maxon Cinema 4D 2026_<hash>\plugins\
@@ -184,15 +186,17 @@ If a feature is switched off it's absent from that list. `FAILED to register` in
 
 The version lives in two places that must agree: the `VERSION` constant near the top of the `.pyp`, and the `VERSION` file beside it. Bump both together.
 
-## Building a `.pypv`
+## Source and building
 
-The source `.pyp` runs as-is. To ship a compiled copy instead, encrypt it with `c4dpy`, which ships with every C4D install — no GUI needed:
+**Only the compiled `.pypv` ships.** The `.pyp` source is not in this repository and is not deployed to the plugins folder; it lives in the private authoring folder alongside its `VERSION` file, and the `.pypv` here is built from it.
+
+To build, encrypt the source with `c4dpy`, which ships with every C4D install — no GUI needed:
 
 ```
 c4dpy stub.py -g_encryptPypFile="C:\path\to\chroma_utilities.pyp"
 ```
 
-The positional `stub.py` is required but its contents don't matter (`pass` is enough) — encryption is a side effect of the flag. The `.pypv` lands **next to the input**, so copy it to the plugin folder and remove the `.pyp`; ship one or the other, not both.
+The positional `stub.py` is required but its contents don't matter (`pass` is enough) — encryption is a side effect of the flag. The `.pypv` lands **next to the input**, so build in a scratch directory and copy only the `.pypv` out — that way no `.pyp` is ever written into the repo or the plugins folder. `*.pyp` is gitignored to keep it that way.
 
 **Don't gate the build on the exit code.** `c4dpy` boots the whole of C4D, so an unrelated plugin can crash at *shutdown* long after encryption succeeded — a `0xC0000409` with a valid `.pypv` on disk is normal. Confirm by the `... encrypted to file:///....pypv` log line and the file's timestamp. A real failure looks different: `0xC0000005` and no `.pypv` produced at all.
 
