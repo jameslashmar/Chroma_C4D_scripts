@@ -2,7 +2,7 @@
 
 A background listener for Cinema 4D. It starts when C4D starts, watches the active document for the whole session, and names things so you don't have to. There's no button and nothing to launch.
 
-**Version:** 1.3.6 · **Plugin ID:** `1069542` (registered with Maxon) · **Requires:** Cinema 4D 2026, Python 3.11
+**Version:** 1.4.0 · **Plugin ID:** `1069542` (registered with Maxon) · **Requires:** Cinema 4D 2026, Python 3.11
 
 Four features, each independently switchable:
 
@@ -163,7 +163,7 @@ Constants at the top of the `.pyp`:
 | `MULTI_WIRE_CREATE_PORTS` | `True` | add a port the node accepts, rather than only wiring existing ones |
 | `MULTI_WIRE_DISCONNECT` | `True` | mirror disconnections as well as connections |
 | `MULTI_WIRE_REMOVE_EMPTY_PORTS` | `"ask"` | `True` / `False` / `"ask"` — what to do with a port left empty by a mirrored disconnection |
-| `MULTI_WIRE_DEBUG` | `True` | print port ids, and list a node's actual ports when one can't be matched |
+| `MULTI_WIRE_DEBUG` | `False` | print port ids, and list a node's actual ports when one can't be matched |
 
 Settings live in the source, so changing one means a rebuild — see [Source and building](#source-and-building).
 | `TEXT_WORD_COUNT` | `4` | words of text to use as the name |
@@ -185,7 +185,7 @@ Drop the `chroma_utilities` folder — containing `chroma_utilities.pypv` — in
 Restart Cinema 4D. On load the console prints the version and which features are active, so you can tell at a glance whether you're running the build you think you are:
 
 ```
-[Chroma Utilities] v1.3.6 listening - parent renamer, text renamer, auto-enumerator, multi-wire, multi-unwire
+[Chroma Utilities] v1.4.0 listening - parent renamer, text renamer, auto-enumerator, multi-wire, multi-unwire
 ```
 
 If a feature is switched off it's absent from that list. `FAILED to register` in place of `listening` means the plugin loaded but C4D rejected the registration.
