@@ -2,7 +2,7 @@
 
 A background listener for Cinema 4D. It starts when C4D starts, watches the active document for the whole session, and names things so you don't have to. There's no button and nothing to launch.
 
-**Plugin ID:** `1069542` (registered with Maxon) · **Requires:** Cinema 4D 2026, Python 3.11
+**Version:** 1.1.0 · **Plugin ID:** `1069542` (registered with Maxon) · **Requires:** Cinema 4D 2026, Python 3.11
 
 Four features, each independently switchable:
 
@@ -150,7 +150,15 @@ Drop the `chroma_utilities` folder into your plugins directory:
 %APPDATA%\Maxon\Maxon Cinema 4D 2026_<hash>\plugins\
 ```
 
-Restart Cinema 4D. The console prints `[Chroma Utilities] listening` on load.
+Restart Cinema 4D. On load the console prints the version and which features are active, so you can tell at a glance whether you're running the build you think you are:
+
+```
+[Chroma Utilities] v1.1.0 listening - parent renamer, text renamer, auto-enumerator, multi-wire
+```
+
+If a feature is switched off it's absent from that list. `FAILED to register` in place of `listening` means the plugin loaded but C4D rejected the registration.
+
+The version lives in two places that must agree: the `VERSION` constant near the top of the `.pyp`, and the `VERSION` file beside it. Bump both together.
 
 ## Building a `.pypv`
 

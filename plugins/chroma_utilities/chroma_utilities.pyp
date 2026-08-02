@@ -21,6 +21,7 @@ import traceback
 from c4d.modules import graphview
 
 PLUGIN_ID = 1069542
+VERSION = "1.1.0"   # keep in step with the VERSION file next to this script
 
 # --- settings -------------------------------------------------------------
 
@@ -555,4 +556,18 @@ if __name__ == "__main__":
         info=0,
         dat=ChromaUtilities()
     )
-    print("[Chroma Utilities] %s" % ("listening" if ok else "FAILED to register"))
+
+    # Name the enabled features on load, so it's obvious at a glance whether
+    # this build is the one you think it is.
+    enabled = [name for name, on in (
+        ("parent renamer", AUTO_NAME_GENERATORS),
+        ("text renamer", AUTO_NAME_TEXT),
+        ("auto-enumerator", AUTO_INCREMENT),
+        ("multi-wire", MULTI_WIRE),
+    ) if on]
+
+    print("[Chroma Utilities] v%s %s%s" % (
+        VERSION,
+        "listening" if ok else "FAILED to register",
+        (" - " + ", ".join(enabled)) if (ok and enabled) else
+        (" - all features disabled" if ok else "")))
