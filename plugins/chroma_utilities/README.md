@@ -2,7 +2,7 @@
 
 A background listener for Cinema 4D. It starts when C4D starts, watches the active document for the whole session, and names things so you don't have to. There's no button and nothing to launch.
 
-**Version:** 1.3.3 · **Plugin ID:** `1069542` (registered with Maxon) · **Requires:** Cinema 4D 2026, Python 3.11
+**Version:** 1.3.5 · **Plugin ID:** `1069542` (registered with Maxon) · **Requires:** Cinema 4D 2026, Python 3.11
 
 Four features, each independently switchable:
 
@@ -84,7 +84,9 @@ Select several XPresso nodes, drag a connection onto a port of **one** of them, 
 
 C4D only ever wires the node you dropped on, even with a whole selection highlighted. This watches the graph's connections and reacts when a new one appears on a node that's part of a multi-node selection, then mirrors it — same source port, same destination port — onto every other selected node in that graph.
 
-**Matching the port across nodes** is done on the port's `MainID`/`SubID` pair, which is how "the same port" is identified on sibling nodes, rather than by name or index. The match is **exact** — a loose match on the main id alone picks up neighbouring parameters, which is how mirroring Scale can end up wiring Position and Rotation too. A newly created port is checked against the ids that were asked for and removed again if it isn't the right one, so a node is left untouched rather than wrongly wired.
+**Creating a port needs the real `DescID`.** `GvPort` reports two flat integers, but `AddPort` wants a `DescID` complete with datatype and creator — a fabricated `DescLevel(id)` matches no actual parameter and is silently refused. So the id is looked up in the description of whatever the node points at, which is also how a sub id of `1000`/`1001`/`1002` is understood as the X/Y/Z component of a parameter the description lists whole.
+
+**Matching the port across nodes is done by name.** Port ids on an Object node behave like slot numbers — `10000001` for the first input, `20000017` for the seventeenth output — so the same id on another node is simply *its* first input, not the same parameter. Matching on id is how wiring one value ends up connecting something else entirely on the other nodes. The port's name comes from the parameter itself, so it means the same thing everywhere; ids are only used as a fallback when a name can't be read. The match is **exact** — a loose match on the main id alone picks up neighbouring parameters, which is how mirroring Scale can end up wiring Position and Rotation too. A newly created port is checked against the ids that were asked for and removed again if it isn't the right one, so a node is left untouched rather than wrongly wired.
 
 **Only one connection is mirrored per pass.** A drag makes exactly one connection, so if several appear together it wasn't a drag — a paste, an undo, a node arriving with its wiring already attached — and mirroring all of them is how nodes end up covered in connections nobody asked for. When that happens it lists them in the console and does nothing.
 
@@ -181,7 +183,7 @@ Drop the `chroma_utilities` folder — containing `chroma_utilities.pypv` — in
 Restart Cinema 4D. On load the console prints the version and which features are active, so you can tell at a glance whether you're running the build you think you are:
 
 ```
-[Chroma Utilities] v1.3.3 listening - parent renamer, text renamer, auto-enumerator, multi-wire, multi-unwire
+[Chroma Utilities] v1.3.5 listening - parent renamer, text renamer, auto-enumerator, multi-wire, multi-unwire
 ```
 
 If a feature is switched off it's absent from that list. `FAILED to register` in place of `listening` means the plugin loaded but C4D rejected the registration.
