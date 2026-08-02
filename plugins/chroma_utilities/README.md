@@ -2,7 +2,7 @@
 
 A background listener for Cinema 4D. It starts when C4D starts, watches the active document for the whole session, and names things so you don't have to. There's no button and nothing to launch.
 
-**Version:** 1.3.5 · **Plugin ID:** `1069542` (registered with Maxon) · **Requires:** Cinema 4D 2026, Python 3.11
+**Version:** 1.3.6 · **Plugin ID:** `1069542` (registered with Maxon) · **Requires:** Cinema 4D 2026, Python 3.11
 
 Four features, each independently switchable:
 
@@ -109,7 +109,9 @@ Console output when something is skipped:
 
 It works the same way in reverse. Unplug a port on one selected node and the same connection is removed from every other selected node.
 
-Only the **equivalent** connection is removed — same source, same port. If another selected node has something different plugged into that port, it's left alone rather than being cleared out on the assumption that you meant it.
+Only the **equivalent** connection is removed: a node is unplugged if the port of that name is currently fed by the same source port. If another selected node has something different plugged into that port, it's left alone rather than being cleared out on the assumption that you meant it.
+
+Like connecting, this matches by name — port ids differ from node to node, so the port you unplug and its counterpart elsewhere never share an id.
 
 **The emptied port is then a question.** C4D leaves a disconnected port in place, which is sometimes what you want and sometimes just clutter. `MULTI_WIRE_REMOVE_EMPTY_PORTS` decides:
 
@@ -183,7 +185,7 @@ Drop the `chroma_utilities` folder — containing `chroma_utilities.pypv` — in
 Restart Cinema 4D. On load the console prints the version and which features are active, so you can tell at a glance whether you're running the build you think you are:
 
 ```
-[Chroma Utilities] v1.3.5 listening - parent renamer, text renamer, auto-enumerator, multi-wire, multi-unwire
+[Chroma Utilities] v1.3.6 listening - parent renamer, text renamer, auto-enumerator, multi-wire, multi-unwire
 ```
 
 If a feature is switched off it's absent from that list. `FAILED to register` in place of `listening` means the plugin loaded but C4D rejected the registration.
