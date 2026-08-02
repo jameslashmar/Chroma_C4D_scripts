@@ -2,7 +2,7 @@
 
 A background listener for Cinema 4D. It starts when C4D starts, watches the active document for the whole session, and names things so you don't have to. There's no button and nothing to launch.
 
-**Version:** 1.2.1 · **Plugin ID:** `1069542` (registered with Maxon) · **Requires:** Cinema 4D 2026, Python 3.11
+**Version:** 1.3.0 · **Plugin ID:** `1069542` (registered with Maxon) · **Requires:** Cinema 4D 2026, Python 3.11
 
 Four features, each independently switchable:
 
@@ -11,7 +11,7 @@ Four features, each independently switchable:
 | 1 | [Parent renamer](#1-parent-renamer) — generators inherit their child's name | `AUTO_NAME_GENERATORS` |
 | 2 | [Text object renamer](#2-text-object-renamer) — text objects name themselves after their text | `AUTO_NAME_TEXT` |
 | 3 | [Auto-enumerator](#3-auto-enumerator) — duplicates count up instead of gaining `.1` | `AUTO_INCREMENT` |
-| 4 | [Multi-wire](#4-multi-wire) — wire one selected XPresso node, wire them all | `MULTI_WIRE` |
+| 4 | [Multi-wire](#4-multi-wire) — wire (or unwire) one selected XPresso node, do them all | `MULTI_WIRE` |
 
 ---
 
@@ -99,6 +99,22 @@ Console output when something is skipped:
 [Chroma Utilities] XPresso on 'RIG': C4D refused the connection to 'Object' -> Cube_02 - source is real, port is matrix
 ```
 
+### Disconnecting
+
+It works the same way in reverse. Unplug a port on one selected node and the same connection is removed from every other selected node.
+
+Only the **equivalent** connection is removed — same source, same port. If another selected node has something different plugged into that port, it's left alone rather than being cleared out on the assumption that you meant it.
+
+**The emptied port is then a question.** C4D leaves a disconnected port in place, which is sometimes what you want and sometimes just clutter. `MULTI_WIRE_REMOVE_EMPTY_PORTS` decides:
+
+| value | behaviour |
+|---|---|
+| `"ask"` (default) | prompts once per disconnection — not once per node, so unwiring twenty nodes is still one question |
+| `True` | always removes the emptied port |
+| `False` | always leaves it |
+
+A node that won't release its port says so in the console rather than failing quietly. Set `MULTI_WIRE_DISCONNECT = False` to mirror connections only.
+
 **Selection is read via `c4d.BIT_ACTIVE`**, the same flag the repo's XPresso scripts use. If a node is highlighted in the editor but the plugin doesn't see it as selected, that flag is the first suspect — see the [XPresso notes](../../docs/xpresso-api-notes.md).
 
 ---
@@ -134,6 +150,9 @@ Constants at the top of the `.pyp`:
 | `AUTO_NAME_TEXT` | `True` | feature 2 on/off |
 | `AUTO_INCREMENT` | `True` | feature 3 on/off |
 | `MULTI_WIRE` | `True` | feature 4 on/off |
+| `MULTI_WIRE_CREATE_PORTS` | `True` | add a port the node accepts, rather than only wiring existing ones |
+| `MULTI_WIRE_DISCONNECT` | `True` | mirror disconnections as well as connections |
+| `MULTI_WIRE_REMOVE_EMPTY_PORTS` | `"ask"` | `True` / `False` / `"ask"` — what to do with a port left empty by a mirrored disconnection |
 | `TEXT_WORD_COUNT` | `4` | words of text to use as the name |
 | `TEXT_MAX_CHARS` | `32` | hard cap on a generated name |
 | `INCREMENT_SEPARATOR` | `"_"` | what sits between stem and number |
@@ -153,7 +172,7 @@ Drop the `chroma_utilities` folder into your plugins directory:
 Restart Cinema 4D. On load the console prints the version and which features are active, so you can tell at a glance whether you're running the build you think you are:
 
 ```
-[Chroma Utilities] v1.2.1 listening - parent renamer, text renamer, auto-enumerator, multi-wire
+[Chroma Utilities] v1.3.0 listening - parent renamer, text renamer, auto-enumerator, multi-wire, multi-unwire
 ```
 
 If a feature is switched off it's absent from that list. `FAILED to register` in place of `listening` means the plugin loaded but C4D rejected the registration.

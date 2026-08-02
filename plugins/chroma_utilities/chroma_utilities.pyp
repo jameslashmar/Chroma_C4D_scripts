@@ -21,7 +21,7 @@ import traceback
 from c4d.modules import graphview
 
 PLUGIN_ID = 1069542
-VERSION = "1.2.1"   # keep in step with the VERSION file next to this script
+VERSION = "1.3.0"   # keep in step with the VERSION file next to this script
 
 # --- settings -------------------------------------------------------------
 
@@ -32,6 +32,13 @@ MULTI_WIRE = True             # feature 4
 MULTI_WIRE_CREATE_PORTS = True  # add the port if the node will accept it
                                 # XPresso ports exist only once added, so
                                 # without this the feature rarely fires
+MULTI_WIRE_DISCONNECT = True    # mirror disconnections as well as connections
+
+# After mirroring a disconnection, the port is left behind, empty. What to do
+# with it:  True  - always remove it
+#           False - always leave it
+#           "ask" - prompt once per disconnection
+MULTI_WIRE_REMOVE_EMPTY_PORTS = "ask"
 
 TEXT_WORD_COUNT = 4           # how many words of the text to use as the name
 TEXT_MAX_CHARS = 32           # hard cap on the generated name
@@ -548,6 +555,85 @@ class ChromaUtilities(c4d.plugins.MessageData):
             print("[Chroma Utilities] %s: mirrored to %d node(s)" % (label, wired))
         return wired
 
+    def _remove_port(self, node, port):
+        """Take the now-empty port off the node, if the node will allow it."""
+        try:
+            if hasattr(node, "RemovePortIsOK") and not node.RemovePortIsOK(port):
+                return False
+        except Exception:
+            pass
+        try:
+            return bool(node.RemovePort(port, True))
+        except Exception:
+            return False
+
+    def _should_remove_ports(self, count, label):
+        """
+        True / False settings answer straight away. "ask" prompts once per
+        disconnection rather than once per node, so mirroring across twenty
+        nodes is still one question.
+        """
+        if MULTI_WIRE_REMOVE_EMPTY_PORTS is True:
+            return True
+        if MULTI_WIRE_REMOVE_EMPTY_PORTS is False:
+            return False
+        try:
+            return c4d.gui.QuestionDialog(
+                "Chroma Utilities\n\n"
+                "Disconnected the same port on %d other selected node(s) "
+                "in %s.\n\n"
+                "Remove the now-empty port from those nodes as well?"
+                % (count, label))
+        except Exception:
+            return False   # no UI available - leave the ports alone
+
+    def _mirror_disconnection(self, conn, nodes, current, label):
+        """
+        The user unplugged a port on one selected node - unplug the same one
+        everywhere else in the selection.
+        """
+        src_path, src_main, src_sub, dst_path, dst_main, dst_sub = conn
+
+        by_path = dict(nodes)
+        dst_node = by_path.get(dst_path)
+        # If the node has gone entirely, this is a deletion, not a
+        # disconnection - nothing to mirror.
+        if dst_node is None or by_path.get(src_path) is None:
+            return 0
+        if not dst_node.GetBit(c4d.BIT_ACTIVE):
+            return 0
+
+        targets = [(path, n) for path, n in nodes
+                   if n.GetBit(c4d.BIT_ACTIVE) and not (n == dst_node)]
+        if not targets:
+            return 0
+
+        emptied = []
+        for path, node in targets:
+            # Only unplug the equivalent connection - same source, same port -
+            # so an unrelated connection on that port is left alone.
+            twin = (src_path, src_main, src_sub, path, dst_main, dst_sub)
+            if twin not in current:
+                continue
+
+            port = self._find_port(node, dst_main, dst_sub, incoming=True)
+            if port is None:
+                continue
+            if port.Remove():
+                emptied.append((node, port))
+                if VERBOSE:
+                    print("[Chroma Utilities] %s: disconnected %s"
+                          % (label, self._node_label(node)))
+
+        if emptied and self._should_remove_ports(len(emptied), label):
+            for node, port in emptied:
+                if not self._remove_port(node, port):
+                    print("[Chroma Utilities] %s: %s kept its port, "
+                          "the node wouldn't release it"
+                          % (label, self._node_label(node)))
+
+        return len(emptied)
+
     def _multi_wire(self, doc):
         changed = False
 
@@ -574,8 +660,12 @@ class ChromaUtilities(c4d.plugins.MessageData):
             for conn in (current - previous):
                 wired += self._mirror_connection(conn, nodes, label)
 
-            # Re-read after acting, so our own connections aren't mistaken
-            # for the user's on the next tick.
+            if MULTI_WIRE_DISCONNECT:
+                for conn in (previous - current):
+                    wired += self._mirror_disconnection(conn, nodes, current, label)
+
+            # Re-read after acting, so our own edits aren't mistaken for the
+            # user's on the next tick.
             self._wiring[key] = self._connections(nodes) if wired else current
 
             if wired:
@@ -668,6 +758,7 @@ if __name__ == "__main__":
         ("text renamer", AUTO_NAME_TEXT),
         ("auto-enumerator", AUTO_INCREMENT),
         ("multi-wire", MULTI_WIRE),
+        ("multi-unwire", MULTI_WIRE and MULTI_WIRE_DISCONNECT),
     ) if on]
 
     print("[Chroma Utilities] v%s %s%s" % (
