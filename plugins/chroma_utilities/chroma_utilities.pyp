@@ -21,7 +21,7 @@ import traceback
 from c4d.modules import graphview
 
 PLUGIN_ID = 1069542
-VERSION = "1.1.0"   # keep in step with the VERSION file next to this script
+VERSION = "1.2.0"   # keep in step with the VERSION file next to this script
 
 # --- settings -------------------------------------------------------------
 
@@ -29,6 +29,9 @@ AUTO_NAME_GENERATORS = True   # feature 1
 AUTO_NAME_TEXT = True         # feature 2
 AUTO_INCREMENT = True         # feature 3
 MULTI_WIRE = True             # feature 4
+MULTI_WIRE_CREATE_PORTS = True  # add the port if the node will accept it
+                                # XPresso ports exist only once added, so
+                                # without this the feature rarely fires
 
 TEXT_WORD_COUNT = 4           # how many words of the text to use as the name
 TEXT_MAX_CHARS = 32           # hard cap on the generated name
@@ -386,10 +389,93 @@ class ChromaUtilities(c4d.plugins.MessageData):
 
     def _find_port(self, node, main_id, sub_id, incoming=True):
         ports = node.GetInPorts() if incoming else node.GetOutPorts()
-        for port in (ports or []):
+        ports = ports or []
+        for port in ports:
             if port.GetMainID() == main_id and port.GetSubID() == sub_id:
                 return port
+        # Fall back to the main id alone - a port with no meaningful sub id
+        # reports it inconsistently across node types.
+        for port in ports:
+            if port.GetMainID() == main_id:
+                return port
         return None
+
+    def _add_port(self, node, main_id, sub_id):
+        """
+        XPresso ports only exist once they've been added - dragging a
+        connection onto a node is what creates one. So mirroring a connection
+        usually means creating the port on the other nodes first.
+
+        The id is tried as a plain int and as a DescID, since parameter ports
+        on an Object node are DescID-based and GetMainID/GetSubID flatten that.
+        """
+        candidates = [main_id]
+        if sub_id is not None and sub_id >= 0:
+            try:
+                candidates.append(c4d.DescID(c4d.DescLevel(main_id),
+                                             c4d.DescLevel(sub_id)))
+            except Exception:
+                pass
+        try:
+            candidates.append(c4d.DescID(c4d.DescLevel(main_id)))
+        except Exception:
+            pass
+
+        for cid in candidates:
+            try:
+                if not node.AddPortIsOK(c4d.GV_PORT_INPUT, cid):
+                    continue
+            except Exception:
+                pass   # AddPortIsOK may not accept a DescID - let AddPort decide
+            try:
+                port = node.AddPort(c4d.GV_PORT_INPUT, cid,
+                                    c4d.GV_PORT_FLAG_IS_VISIBLE, True)
+            except Exception:
+                port = None
+            if port is not None:
+                return port
+        return None
+
+    def _node_label(self, node):
+        """
+        'Object' three times over tells you nothing. Where a node links to
+        something, name it: "Object -> Cube_02".
+        """
+        name = node.GetName()
+        doc = self._doc
+        bc = None
+        for attr in ("GetOpContainerInstance", "GetOperatorContainer", "GetDataInstance"):
+            fn = getattr(node, attr, None)
+            if fn:
+                try:
+                    bc = fn()
+                    if bc is not None:
+                        break
+                except Exception:
+                    pass
+        if bc is None or doc is None:
+            return "'%s'" % name
+
+        try:
+            for i in range(len(bc)):
+                cid = bc.GetIndexId(i)
+                if cid == c4d.NOTOK:
+                    break
+                try:
+                    linked = bc.GetLink(cid, doc)
+                except Exception:
+                    continue
+                if linked is not None:
+                    return "'%s' -> %s" % (name, linked.GetName())
+        except Exception:
+            pass
+        return "'%s'" % name
+
+    def _type_name(self, value_type):
+        return {
+            c4d.ID_GV_VALUE_TYPE_REAL: "real",
+            c4d.ID_GV_VALUE_TYPE_VECTOR: "vector",
+        }.get(value_type, str(value_type))
 
     def _mirror_connection(self, conn, nodes, label):
         """Replicate one new connection onto every other selected node."""
@@ -417,17 +503,24 @@ class ChromaUtilities(c4d.plugins.MessageData):
         for node in targets:
             port = self._find_port(node, dst_main, dst_sub, incoming=True)
 
-            # Only wire a port that already exists - we don't invent ports.
+            # The port usually doesn't exist yet - in XPresso a port appears
+            # only when something is dragged onto it. Create it if the node
+            # will take it; if it won't, that's a real "can't do this" and
+            # gets reported.
+            if port is None and MULTI_WIRE_CREATE_PORTS:
+                port = self._add_port(node, dst_main, dst_sub)
+
             if port is None:
-                print("[Chroma Utilities] %s: '%s' has no matching port, skipped"
-                      % (label, node.GetName()))
+                print("[Chroma Utilities] %s: %s won't take port %d/%d, skipped"
+                      % (label, self._node_label(node), dst_main, dst_sub))
                 continue
 
             # Report a type mismatch rather than making a bad connection.
             if port.GetValueType() != src_type:
-                print("[Chroma Utilities] %s: '%s' port type differs "
-                      "(%s vs %s), skipped"
-                      % (label, node.GetName(), port.GetValueType(), src_type))
+                print("[Chroma Utilities] %s: %s port is %s, source is %s - skipped"
+                      % (label, self._node_label(node),
+                         self._type_name(port.GetValueType()),
+                         self._type_name(src_type)))
                 continue
 
             # Replace whatever was feeding it.
@@ -436,9 +529,12 @@ class ChromaUtilities(c4d.plugins.MessageData):
 
             if src_port.Connect(port):
                 wired += 1
+                if VERBOSE:
+                    print("[Chroma Utilities] %s: wired %s"
+                          % (label, self._node_label(node)))
             else:
-                print("[Chroma Utilities] %s: connection to '%s' failed"
-                      % (label, node.GetName()))
+                print("[Chroma Utilities] %s: connection to %s failed"
+                      % (label, self._node_label(node)))
 
         if wired and VERBOSE:
             print("[Chroma Utilities] %s: mirrored to %d node(s)" % (label, wired))

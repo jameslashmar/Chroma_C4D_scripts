@@ -2,7 +2,7 @@
 
 A background listener for Cinema 4D. It starts when C4D starts, watches the active document for the whole session, and names things so you don't have to. There's no button and nothing to launch.
 
-**Version:** 1.1.0 · **Plugin ID:** `1069542` (registered with Maxon) · **Requires:** Cinema 4D 2026, Python 3.11
+**Version:** 1.2.0 · **Plugin ID:** `1069542` (registered with Maxon) · **Requires:** Cinema 4D 2026, Python 3.11
 
 Four features, each independently switchable:
 
@@ -84,19 +84,21 @@ Select several XPresso nodes, drag a connection onto a port of **one** of them, 
 
 C4D only ever wires the node you dropped on, even with a whole selection highlighted. This watches the graph's connections and reacts when a new one appears on a node that's part of a multi-node selection, then mirrors it — same source port, same destination port — onto every other selected node in that graph.
 
-**Matching the port across nodes** is done on the port's `MainID`/`SubID` pair, which is how "the same port" is identified on sibling nodes, rather than by name or index.
+**Matching the port across nodes** is done on the port's `MainID`/`SubID` pair, which is how "the same port" is identified on sibling nodes, rather than by name or index. Nodes are named in the console by what they link to — `'Object' -> Cube_02` — because a graph full of nodes all called `Object` tells you nothing.
+
+**Match the component you wired.** A slider is a *real* and an object's Scale is a *vector*, so wiring a slider into the whole Scale port is a type mismatch and gets reported. Drag onto `Scale . X` (or add a Real-to-Vector node) and the mirror finds the matching component on the other nodes.
 
 Three rules, each chosen deliberately:
 
-- **Ports are matched, never created.** If a selected node doesn't have that port showing, it's skipped and named in the console. The plugin won't invent ports on your nodes.
+- **Ports are created when the node will accept them.** In XPresso a port only exists once something has been dragged onto it, so the other selected nodes usually have no such port at all — mirroring would never fire without creating it. The plugin asks `AddPortIsOK()` first and only adds a port the node genuinely accepts; a node that refuses is skipped and named in the console. Set `MULTI_WIRE_CREATE_PORTS = False` to only ever wire ports that already exist.
 - **Type mismatches are reported, not forced.** If a node's port is a different value type it's skipped with a console line saying which node and which types, rather than making a connection that silently misbehaves.
 - **Existing connections are replaced.** If a target port is already fed by something else, that connection is removed first. This is the destructive one — see the limitation below.
 
 Console output when something is skipped:
 
 ```
-[Chroma Utilities] XPresso on 'RIG': 'Range Mapper.3' has no matching port, skipped
-[Chroma Utilities] XPresso on 'RIG': 'Compare.1' port type differs (400007 vs 400006), skipped
+[Chroma Utilities] XPresso on 'RIG': 'Object' -> Cube_03 won't take port 1102/-1, skipped
+[Chroma Utilities] XPresso on 'RIG': 'Object' -> Cube_02 port is vector, source is real - skipped
 ```
 
 **Selection is read via `c4d.BIT_ACTIVE`**, the same flag the repo's XPresso scripts use. If a node is highlighted in the editor but the plugin doesn't see it as selected, that flag is the first suspect — see the [XPresso notes](../../docs/xpresso-api-notes.md).
@@ -153,7 +155,7 @@ Drop the `chroma_utilities` folder into your plugins directory:
 Restart Cinema 4D. On load the console prints the version and which features are active, so you can tell at a glance whether you're running the build you think you are:
 
 ```
-[Chroma Utilities] v1.1.0 listening - parent renamer, text renamer, auto-enumerator, multi-wire
+[Chroma Utilities] v1.2.0 listening - parent renamer, text renamer, auto-enumerator, multi-wire
 ```
 
 If a feature is switched off it's absent from that list. `FAILED to register` in place of `listening` means the plugin loaded but C4D rejected the registration.
