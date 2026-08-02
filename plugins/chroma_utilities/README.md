@@ -4,13 +4,14 @@ A background listener for Cinema 4D. It starts when C4D starts, watches the acti
 
 **Plugin ID:** `1069542` (registered with Maxon) · **Requires:** Cinema 4D 2026, Python 3.11
 
-Three features, each independently switchable:
+Four features, each independently switchable:
 
 | | Feature | Setting |
 |---|---|---|
 | 1 | [Parent renamer](#1-parent-renamer) — generators inherit their child's name | `AUTO_NAME_GENERATORS` |
 | 2 | [Text object renamer](#2-text-object-renamer) — text objects name themselves after their text | `AUTO_NAME_TEXT` |
 | 3 | [Auto-enumerator](#3-auto-enumerator) — duplicates count up instead of gaining `.1` | `AUTO_INCREMENT` |
+| 4 | [Multi-wire](#4-multi-wire) — wire one selected XPresso node, wire them all | `MULTI_WIRE` |
 
 ---
 
@@ -77,17 +78,42 @@ The separator is `INCREMENT_SEPARATOR`: set it to `""` or `"-"` for `Light02` or
 
 **This replaces [Smart Increment](https://www.romainrosi.com) by Romain Rosi**, including its matching-children behaviour, so don't run both — they'd each try to rename the same new object. The difference is output format: Smart Increment preserves the original's numbering style (`Camera 02` → `Camera 03`), this normalises onto the underscore form.
 
+## 4. Multi-wire
+
+Select several XPresso nodes, drag a connection onto a port of **one** of them, and the same connection is made on **all** of them. Wiring a rig control into twenty nodes becomes one drag instead of twenty.
+
+C4D only ever wires the node you dropped on, even with a whole selection highlighted. This watches the graph's connections and reacts when a new one appears on a node that's part of a multi-node selection, then mirrors it — same source port, same destination port — onto every other selected node in that graph.
+
+**Matching the port across nodes** is done on the port's `MainID`/`SubID` pair, which is how "the same port" is identified on sibling nodes, rather than by name or index.
+
+Three rules, each chosen deliberately:
+
+- **Ports are matched, never created.** If a selected node doesn't have that port showing, it's skipped and named in the console. The plugin won't invent ports on your nodes.
+- **Type mismatches are reported, not forced.** If a node's port is a different value type it's skipped with a console line saying which node and which types, rather than making a connection that silently misbehaves.
+- **Existing connections are replaced.** If a target port is already fed by something else, that connection is removed first. This is the destructive one — see the limitation below.
+
+Console output when something is skipped:
+
+```
+[Chroma Utilities] XPresso on 'RIG': 'Range Mapper.3' has no matching port, skipped
+[Chroma Utilities] XPresso on 'RIG': 'Compare.1' port type differs (400007 vs 400006), skipped
+```
+
+**Selection is read via `c4d.BIT_ACTIVE`**, the same flag the repo's XPresso scripts use. If a node is highlighted in the editor but the plugin doesn't see it as selected, that flag is the first suspect — see the [XPresso notes](../../docs/xpresso-api-notes.md).
+
 ---
 
-## How the three interact
+## How the four interact
 
-Only one of them ever renames a given object on a given pass, in this order:
+Features 1–3 rename objects, and only one of them ever renames a given object on a given pass, in this order:
 
 1. Parent renamer
 2. Text object renamer
 3. Auto-enumerator
 
 The enumerator runs last and only if nothing more specific claimed the name — a duplicated default-named Extrude with a child in it is more useful taking that child's name than becoming `Extrude_02`.
+
+Feature 4 is independent — it operates on XPresso graphs, not object names, and doesn't interact with the other three.
 
 ## It won't fight you
 
@@ -107,6 +133,7 @@ Constants at the top of the `.pyp`:
 | `AUTO_NAME_GENERATORS` | `True` | feature 1 on/off |
 | `AUTO_NAME_TEXT` | `True` | feature 2 on/off |
 | `AUTO_INCREMENT` | `True` | feature 3 on/off |
+| `MULTI_WIRE` | `True` | feature 4 on/off |
 | `TEXT_WORD_COUNT` | `4` | words of text to use as the name |
 | `TEXT_MAX_CHARS` | `32` | hard cap on a generated name |
 | `INCREMENT_SEPARATOR` | `"_"` | what sits between stem and number |
@@ -147,7 +174,8 @@ Object identity comes from `GetGUID()`, which is derived from the object's marke
 
 - **Renames are not undoable.** They happen outside any undo block, because opening one from a background message handler can interleave badly with whatever the user is doing. Ctrl+Z won't put an auto-assigned name back.
 - **MoText's text parameter is probed, not assumed** — see feature 2 above.
-- **It walks the whole object tree every tick.** Fine on ordinary scenes; on a very heavy one this is the first thing to optimise, by gating the walk on a document dirty check.
+- **Multi-wire replaces existing connections, and that isn't undoable either.** If a target port was already fed by something, that connection is removed. Combined with the no-undo limitation above, this is the one feature that can lose work — set `MULTI_WIRE = False` if you'd rather not risk it on a rig you can't easily rebuild.
+- **It walks the whole object tree every tick**, and every XPresso graph too. Fine on ordinary scenes; on a very heavy one this is the first thing to optimise, by gating the walk on a document dirty check.
 
 ## Credit
 

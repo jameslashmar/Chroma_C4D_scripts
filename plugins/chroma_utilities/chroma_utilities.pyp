@@ -18,6 +18,7 @@ Plugin ID: 1069542 (registered with Maxon)
 import c4d
 import re
 import traceback
+from c4d.modules import graphview
 
 PLUGIN_ID = 1069542
 
@@ -26,6 +27,7 @@ PLUGIN_ID = 1069542
 AUTO_NAME_GENERATORS = True   # feature 1
 AUTO_NAME_TEXT = True         # feature 2
 AUTO_INCREMENT = True         # feature 3
+MULTI_WIRE = True             # feature 4
 
 TEXT_WORD_COUNT = 4           # how many words of the text to use as the name
 TEXT_MAX_CHARS = 32           # hard cap on the generated name
@@ -64,6 +66,7 @@ class ChromaUtilities(c4d.plugins.MessageData):
         self._baseline = set()        # objects that existed when we first saw this document
         self._default_names = {}      # object type -> its default name, cached
         self._text_warned = set()     # types we've already complained about
+        self._wiring = {}             # graph -> the connections we last saw
 
     # -- plugin entry points ------------------------------------------------
 
@@ -322,6 +325,177 @@ class ChromaUtilities(c4d.plugins.MessageData):
             print("[Chroma Utilities] '%s' -> '%s'" % (name, new_name))
         return True
 
+    # -- feature 4: wire one selected XPresso node, wire them all -----------
+    #
+    # Select several nodes, drag a connection onto a port of one of them, and
+    # the same connection is made on every other selected node. There's no
+    # hook for a port drag, so this watches the graph's connections and reacts
+    # when a new one appears on a node that's part of a multi-node selection.
+
+    def _graph_nodes(self, master):
+        """
+        Every node in a graph as (path, node). The path is its position in the
+        walk - "0.2.1" - which gives stable identity across ticks without
+        relying on GetGUID(), which graph nodes may not carry.
+        """
+        root = master.GetRoot()
+        if root is None:
+            return []
+
+        found = []
+
+        def walk(node, prefix):
+            i = 0
+            while node:
+                path = "%s.%d" % (prefix, i)
+                found.append((path, node))
+                walk(node.GetDown(), path)
+                node = node.GetNext()
+                i += 1
+
+        walk(root.GetDown(), "")
+        return found
+
+    def _path_of(self, target, nodes):
+        # == compares the underlying node; 'is' would not, because C4D hands
+        # back a fresh Python wrapper on every call.
+        for path, node in nodes:
+            if node == target:
+                return path
+        return None
+
+    def _connections(self, nodes):
+        """
+        Every connection in the graph, as a hashable tuple. Read from the
+        output side, which avoids GetIncomingSource() and its odd signature.
+        """
+        conns = set()
+        for path, node in nodes:
+            for out in (node.GetOutPorts() or []):
+                for dest in (out.GetDestination() or []):
+                    dest_node = dest.GetNode()
+                    if dest_node is None:
+                        continue
+                    dest_path = self._path_of(dest_node, nodes)
+                    if dest_path is None:
+                        continue
+                    conns.add((path, out.GetMainID(), out.GetSubID(),
+                               dest_path, dest.GetMainID(), dest.GetSubID()))
+        return conns
+
+    def _find_port(self, node, main_id, sub_id, incoming=True):
+        ports = node.GetInPorts() if incoming else node.GetOutPorts()
+        for port in (ports or []):
+            if port.GetMainID() == main_id and port.GetSubID() == sub_id:
+                return port
+        return None
+
+    def _mirror_connection(self, conn, nodes, label):
+        """Replicate one new connection onto every other selected node."""
+        src_path, src_main, src_sub, dst_path, dst_main, dst_sub = conn
+
+        by_path = dict(nodes)
+        src_node = by_path.get(src_path)
+        dst_node = by_path.get(dst_path)
+        if src_node is None or dst_node is None:
+            return 0
+        if not dst_node.GetBit(c4d.BIT_ACTIVE):
+            return 0   # the wired node isn't part of a selection
+
+        targets = [n for _, n in nodes
+                   if n.GetBit(c4d.BIT_ACTIVE) and not (n == dst_node)]
+        if not targets:
+            return 0
+
+        src_port = self._find_port(src_node, src_main, src_sub, incoming=False)
+        if src_port is None:
+            return 0
+        src_type = src_port.GetValueType()
+
+        wired = 0
+        for node in targets:
+            port = self._find_port(node, dst_main, dst_sub, incoming=True)
+
+            # Only wire a port that already exists - we don't invent ports.
+            if port is None:
+                print("[Chroma Utilities] %s: '%s' has no matching port, skipped"
+                      % (label, node.GetName()))
+                continue
+
+            # Report a type mismatch rather than making a bad connection.
+            if port.GetValueType() != src_type:
+                print("[Chroma Utilities] %s: '%s' port type differs "
+                      "(%s vs %s), skipped"
+                      % (label, node.GetName(), port.GetValueType(), src_type))
+                continue
+
+            # Replace whatever was feeding it.
+            if port.IsIncomingConnected():
+                port.Remove()
+
+            if src_port.Connect(port):
+                wired += 1
+            else:
+                print("[Chroma Utilities] %s: connection to '%s' failed"
+                      % (label, node.GetName()))
+
+        if wired and VERBOSE:
+            print("[Chroma Utilities] %s: mirrored to %d node(s)" % (label, wired))
+        return wired
+
+    def _multi_wire(self, doc):
+        changed = False
+
+        for host, tag in self._xpresso_tags(doc):
+            master = tag.GetNodeMaster()
+            if master is None:
+                continue
+
+            nodes = self._graph_nodes(master)
+            if not nodes:
+                continue
+
+            label = "XPresso on '%s'" % host.GetName()
+            key = label
+            current = self._connections(nodes)
+            previous = self._wiring.get(key)
+
+            # First sight of this graph: record and touch nothing.
+            if previous is None:
+                self._wiring[key] = current
+                continue
+
+            wired = 0
+            for conn in (current - previous):
+                wired += self._mirror_connection(conn, nodes, label)
+
+            # Re-read after acting, so our own connections aren't mistaken
+            # for the user's on the next tick.
+            self._wiring[key] = self._connections(nodes) if wired else current
+
+            if wired:
+                graphview.RedrawMaster(master)
+                changed = True
+
+        return changed
+
+    def _xpresso_tags(self, doc):
+        """Every XPresso tag in the scene, wherever the tag lives."""
+        found = []
+
+        def walk(op):
+            while op:
+                tag = op.GetFirstTag()
+                while tag:
+                    if tag.GetType() == c4d.Texpresso:
+                        found.append((op, tag))
+                    tag = tag.GetNext()
+                walk(op.GetDown())
+                op = op.GetNext()
+
+        walk(doc.GetFirstObject())
+        return found
+
     # -- the tick -----------------------------------------------------------
 
     def _tick(self):
@@ -336,7 +510,11 @@ class ChromaUtilities(c4d.plugins.MessageData):
         if not self._same_document(doc):
             self._doc = doc
             self._baseline = set(key for key, _ in objects)
+            self._wiring = {}
             return
+
+        if MULTI_WIRE and self._multi_wire(doc):
+            c4d.EventAdd()
 
         changed = False
         taken = set(op.GetName() for _, op in objects)
