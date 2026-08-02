@@ -21,7 +21,7 @@ import traceback
 from c4d.modules import graphview
 
 PLUGIN_ID = 1069542
-VERSION = "1.2.0"   # keep in step with the VERSION file next to this script
+VERSION = "1.2.1"   # keep in step with the VERSION file next to this script
 
 # --- settings -------------------------------------------------------------
 
@@ -472,10 +472,12 @@ class ChromaUtilities(c4d.plugins.MessageData):
         return "'%s'" % name
 
     def _type_name(self, value_type):
-        return {
-            c4d.ID_GV_VALUE_TYPE_REAL: "real",
-            c4d.ID_GV_VALUE_TYPE_VECTOR: "vector",
-        }.get(value_type, str(value_type))
+        for name in ("REAL", "VECTOR", "INTEGER", "BOOL", "STRING",
+                     "MATRIX", "TIME", "NORMAL"):
+            const = getattr(c4d, "ID_GV_VALUE_TYPE_" + name, None)
+            if const is not None and const == value_type:
+                return name.lower()
+        return str(value_type)
 
     def _mirror_connection(self, conn, nodes, label):
         """Replicate one new connection onto every other selected node."""
@@ -515,13 +517,12 @@ class ChromaUtilities(c4d.plugins.MessageData):
                       % (label, self._node_label(node), dst_main, dst_sub))
                 continue
 
-            # Report a type mismatch rather than making a bad connection.
-            if port.GetValueType() != src_type:
-                print("[Chroma Utilities] %s: %s port is %s, source is %s - skipped"
-                      % (label, self._node_label(node),
-                         self._type_name(port.GetValueType()),
-                         self._type_name(src_type)))
-                continue
+            # Differing types are not an error. XPresso converts between
+            # compatible ones - a real into a vector drives all three
+            # components at once, which is a normal and useful thing to do.
+            # So don't pre-judge it: attempt the connection and let C4D
+            # refuse if it genuinely can't.
+            mismatch = port.GetValueType() != src_type
 
             # Replace whatever was feeding it.
             if port.IsIncomingConnected():
@@ -530,11 +531,18 @@ class ChromaUtilities(c4d.plugins.MessageData):
             if src_port.Connect(port):
                 wired += 1
                 if VERBOSE:
-                    print("[Chroma Utilities] %s: wired %s"
-                          % (label, self._node_label(node)))
+                    print("[Chroma Utilities] %s: wired %s%s"
+                          % (label, self._node_label(node),
+                             (" (%s -> %s)" % (self._type_name(src_type),
+                                               self._type_name(port.GetValueType())))
+                             if mismatch else ""))
             else:
-                print("[Chroma Utilities] %s: connection to %s failed"
-                      % (label, self._node_label(node)))
+                print("[Chroma Utilities] %s: C4D refused the connection to %s"
+                      "%s" % (label, self._node_label(node),
+                              (" - source is %s, port is %s"
+                               % (self._type_name(src_type),
+                                  self._type_name(port.GetValueType())))
+                              if mismatch else ""))
 
         if wired and VERBOSE:
             print("[Chroma Utilities] %s: mirrored to %d node(s)" % (label, wired))
