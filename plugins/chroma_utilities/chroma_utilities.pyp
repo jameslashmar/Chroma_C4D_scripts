@@ -21,7 +21,7 @@ import traceback
 from c4d.modules import graphview
 
 PLUGIN_ID = 1069542
-VERSION = "1.3.0"   # keep in step with the VERSION file next to this script
+VERSION = "1.3.1"   # keep in step with the VERSION file next to this script
 
 # --- settings -------------------------------------------------------------
 
@@ -39,6 +39,8 @@ MULTI_WIRE_DISCONNECT = True    # mirror disconnections as well as connections
 #           False - always leave it
 #           "ask" - prompt once per disconnection
 MULTI_WIRE_REMOVE_EMPTY_PORTS = "ask"
+
+MULTI_WIRE_DEBUG = False        # print port ids and why a node was skipped
 
 TEXT_WORD_COUNT = 4           # how many words of the text to use as the name
 TEXT_MAX_CHARS = 32           # hard cap on the generated name
@@ -395,17 +397,24 @@ class ChromaUtilities(c4d.plugins.MessageData):
         return conns
 
     def _find_port(self, node, main_id, sub_id, incoming=True):
+        """
+        Exact match only. An earlier version fell back to matching the main id
+        alone, which is how wiring Scale ended up also wiring Position and
+        Rotation - those ports are near neighbours and a loose match picks the
+        wrong one. Better to wire nothing than the wrong port.
+        """
         ports = node.GetInPorts() if incoming else node.GetOutPorts()
-        ports = ports or []
-        for port in ports:
+        for port in (ports or []):
             if port.GetMainID() == main_id and port.GetSubID() == sub_id:
                 return port
-        # Fall back to the main id alone - a port with no meaningful sub id
-        # reports it inconsistently across node types.
-        for port in ports:
-            if port.GetMainID() == main_id:
-                return port
         return None
+
+    def _dump_ports(self, node, incoming=True):
+        ports = node.GetInPorts() if incoming else node.GetOutPorts()
+        for port in (ports or []):
+            print("[Chroma Utilities]     %s  main=%d sub=%d type=%s"
+                  % (port.GetName(node), port.GetMainID(), port.GetSubID(),
+                     self._type_name(port.GetValueType())))
 
     def _add_port(self, node, main_id, sub_id):
         """
@@ -416,7 +425,7 @@ class ChromaUtilities(c4d.plugins.MessageData):
         The id is tried as a plain int and as a DescID, since parameter ports
         on an Object node are DescID-based and GetMainID/GetSubID flatten that.
         """
-        candidates = [main_id]
+        candidates = []
         if sub_id is not None and sub_id >= 0:
             try:
                 candidates.append(c4d.DescID(c4d.DescLevel(main_id),
@@ -427,20 +436,30 @@ class ChromaUtilities(c4d.plugins.MessageData):
             candidates.append(c4d.DescID(c4d.DescLevel(main_id)))
         except Exception:
             pass
+        candidates.append(main_id)
 
         for cid in candidates:
-            try:
-                if not node.AddPortIsOK(c4d.GV_PORT_INPUT, cid):
-                    continue
-            except Exception:
-                pass   # AddPortIsOK may not accept a DescID - let AddPort decide
             try:
                 port = node.AddPort(c4d.GV_PORT_INPUT, cid,
                                     c4d.GV_PORT_FLAG_IS_VISIBLE, True)
             except Exception:
                 port = None
-            if port is not None:
+            if port is None:
+                continue
+
+            # Verify we got the port we asked for. AddPort with a loosely
+            # specified id can hand back a neighbouring parameter - which is
+            # how a Scale mirror turned into Position, Rotation and Scale all
+            # being wired. If it's the wrong one, take it straight back off.
+            if port.GetMainID() == main_id and port.GetSubID() == sub_id:
                 return port
+
+            if MULTI_WIRE_DEBUG:
+                print("[Chroma Utilities]   asked for main=%d sub=%d, "
+                      "got main=%d sub=%d - removing"
+                      % (main_id, sub_id, port.GetMainID(), port.GetSubID()))
+            self._remove_port(node, port)
+
         return None
 
     def _node_label(self, node):
@@ -522,6 +541,9 @@ class ChromaUtilities(c4d.plugins.MessageData):
             if port is None:
                 print("[Chroma Utilities] %s: %s won't take port %d/%d, skipped"
                       % (label, self._node_label(node), dst_main, dst_sub))
+                if MULTI_WIRE_DEBUG:
+                    print("[Chroma Utilities]   ports it does have:")
+                    self._dump_ports(node, incoming=True)
                 continue
 
             # Differing types are not an error. XPresso converts between
@@ -614,19 +636,39 @@ class ChromaUtilities(c4d.plugins.MessageData):
             # so an unrelated connection on that port is left alone.
             twin = (src_path, src_main, src_sub, path, dst_main, dst_sub)
             if twin not in current:
+                if MULTI_WIRE_DEBUG:
+                    print("[Chroma Utilities] %s: %s isn't wired the same way, "
+                          "left alone" % (label, self._node_label(node)))
                 continue
 
             port = self._find_port(node, dst_main, dst_sub, incoming=True)
             if port is None:
+                print("[Chroma Utilities] %s: %s has no port %d/%d to unplug"
+                      % (label, self._node_label(node), dst_main, dst_sub))
                 continue
+
             if port.Remove():
                 emptied.append((node, port))
                 if VERBOSE:
                     print("[Chroma Utilities] %s: disconnected %s"
                           % (label, self._node_label(node)))
+            else:
+                print("[Chroma Utilities] %s: couldn't unplug %s"
+                      % (label, self._node_label(node)))
 
-        if emptied and self._should_remove_ports(len(emptied), label):
-            for node, port in emptied:
+        if not emptied:
+            return 0
+
+        # The port on the node you unplugged yourself is empty too. Leaving it
+        # while removing the others would be inconsistent, so it goes in the
+        # same question.
+        origin_port = self._find_port(dst_node, dst_main, dst_sub, incoming=True)
+        candidates = list(emptied)
+        if origin_port is not None and not origin_port.IsIncomingConnected():
+            candidates.append((dst_node, origin_port))
+
+        if self._should_remove_ports(len(candidates), label):
+            for node, port in candidates:
                 if not self._remove_port(node, port):
                     print("[Chroma Utilities] %s: %s kept its port, "
                           "the node wouldn't release it"
