@@ -4,123 +4,103 @@ It searches every XPresso tag in the scene, finds the nodes that reference
 that object, selects them in the XPresso editor, brings that editor forward
 on the right graph, and centres the view on what it found.
 
-Cinema 4D 2026 / Python API. Windows only for the centring step - see note 2.
+Cinema 4D 2026 / Python API. No platform dependency.
 """
 
 import c4d
 from c4d.modules import graphview
 
-try:
-    import ctypes
-except Exception:
-    ctypes = None
-
-try:
-    import threading
-except Exception:
-    threading = None
-
 # --- settings -------------------------------------------------------------
 
-# Bring the XPresso editor forward on the graph that matched, and scroll the
-# view to the node(s) found.
+# Bring the XPresso editor forward on the graph that matched, and centre the
+# view on the node(s) found.
 FOCUS_XPRESSO_EDITOR = True
 CENTRE_ON_MATCH = True
 
-# Which of the editor's built-in view keys to send.
-#   "S" - frame the selection. Centres on the match, but zooms in hard; on a
-#         single node that is usually closer than you want.
-#   "H" - frame the whole graph. Doesn't centre on the match, but the match is
-#         selected and highlighted, so it's easy to spot in context.
-CENTRE_KEY = "S"
+# Zoom to land on. 1.0 = 100%. This is yours to pick - the old approach sent
+# the editor's 's' key, which zooms hard into a single node and gives you no
+# say in it.
+CENTRE_ZOOM = 2.0
 
-# Milliseconds to wait before sending the key, so C4D has drained its event
-# queue and the editor has actually taken keyboard focus. Delivery is already
-# deferred past the end of this script by the Windows input queue - this just
-# widens the gap. Raise it if the key seems to land too early; 0 sends inline.
-KEY_DELAY_MS = 120
+# Size of the XPresso editor's drawing area, in pixels. C4D exposes no way to
+# ask, so it has to be told. Only affects how exactly centred the node lands;
+# being wrong by a few hundred pixels puts it off-centre, never off-screen.
+#
+# To recalibrate: position a node in the middle of the editor by hand, then
+# run probe_xpresso_view.py for `scroll` and `zoom`, and read the node's
+# centre from this script's output. Then
+#     VIEW_W = (centre_x - scroll_x) * zoom * 2
+#     VIEW_H = (centre_y - scroll_y) * zoom * 2
+VIEW_W = 1184.0
+VIEW_H = 676.0
 
 XPRESSO_EDITOR_ID = 1001148           # "XPresso Editor" in the plugin list
 
-VK_CODES = {"S": 0x53, "H": 0x48}
+# The view transform lives on the ROOT XGroup's operator container:
+#     root.GetDataInstance()
+#         .GetContainerInstance(c4d.ID_SHAPECONTAINER)
+#         .GetContainerInstance(c4d.ID_OPERATORCONTAINER)
+VIEW_ZOOM_ID = 104                    # float, 1.0 = 100%
+VIEW_SCROLL_IDS = (102, 103)          # view top-left, in graph units
+NODE_POS_IDS = (100, 101)             # node x/y within its canvas
+NODE_SIZE_IDS = (108, 109)            # node width/height
 
-# 1. There is no command that centres an XPresso graph. Not hidden, not
-#    undocumented - it does not exist.
+# 1. The view transform is readable AND writable, which earlier notes in this
+#    repo said was impossible. Measured against a live 2026 session:
 #
-#    Established by enumerating all 3,390 command plugins in a live 2026
-#    install (probe_xpresso_commands.py). The whole classic XPresso family is
-#    four entries - 1001138 "XPresso Pool", 1001145 "XPresso Manager",
-#    1001148 (the editor, blank name) and 1001149 "XPresso" - and not one of
-#    them frames anything. There are exactly three Zoom In/Out pairs in the
-#    entire list: 14063/14064 (3D viewport), 1016010/1016011, and
-#    465002325/465002326. That last block also owns "Arrange Selected Nodes"
-#    and "Show All Ports", so it belongs to the *new* node editor (scene and
-#    material nodes), not to XPresso. There is no fourth block.
+#        screen_px = (graph_pos - scroll) * zoom
 #
-#    The editor's View menu entries are internal dialog ids, not command
-#    plugins. That is also why they can't be bound in Customise Commands.
+#    so `scroll` is the view's top-left corner expressed in graph units, and
+#    centring a point is scroll = point - viewport / (2 * zoom).
 #
-#    Do not use 13038 "Frame Selected Elements" for this. It is a 3D VIEWPORT
-#    command - per Ferdinand at Maxon it "is grouped together with a whole
-#    architecture of viewport commands which first check if they can get hold
-#    of the active viewport" (developers.maxon.net/topic/13176). It frames the
-#    viewport whichever manager has focus, so it can never centre a graph, and
-#    any theory about manager focus built on top of it is chasing the wrong
-#    thing.
+#    The giveaway was that `scroll * zoom` comes out to exact integers
+#    (-275.00, -183.00 on the calibration sample). The editor keeps its scroll
+#    in whole pixels and stores pixels/zoom here.
 #
-# 2. What does work is the editor's own hardcoded keys. Pressing S in the
-#    XPresso editor frames the selection and H frames the whole graph. They're
-#    built into the dialog rather than registered as commands, which is
-#    exactly why nothing in the command list could reach them.
+#    Writing scroll and zoom is navigation, not editing: shifting scroll by
+#    thousands of units and root position by hundreds moved 0 of 80 node
+#    coordinates in a production rig. Do not confuse ids 102/103 (the view)
+#    with 100/101 on the root, which are the root XGroup's own position.
 #
-#    So the script sends a synthetic keystroke (Windows keybd_event via
-#    ctypes) instead of calling a command. That makes the centring step
-#    Windows-only; on other platforms it is skipped and reported.
+# 2. There is no command that centres an XPresso graph, so don't look for one.
+#    Enumerating all 3,390 command plugins shows the entire classic XPresso
+#    family is 1001138 "XPresso Pool", 1001145 "XPresso Manager", 1001148 (the
+#    editor, blank name) and 1001149 "XPresso" - none of which frames
+#    anything. The Frame/Center/Zoom block at 465002xxx belongs to the new
+#    node editor (scene and material nodes), not to XPresso.
 #
-# 3. The keystroke has to arrive *after* this script returns, because
-#    keyboard focus is queued. CallCommand(XPRESSO_EDITOR_ID) asks for the
-#    editor to become active, but the activation is processed on the next
-#    message loop - anything sent on the following line reaches whatever had
-#    focus before, usually the Object Manager or the viewport.
+#    In particular 13038 "Frame Selected Elements" is a 3D VIEWPORT command.
+#    Per Ferdinand at Maxon it "is grouped together with a whole architecture
+#    of viewport commands which first check if they can get hold of the active
+#    viewport" (developers.maxon.net/topic/13176). It frames the viewport
+#    whichever manager has focus, so it can never centre a graph.
 #
-#    That deferral is free here. keybd_event posts to the *Windows* input
-#    queue, and C4D only drains that on its next message pump - which is after
-#    this script has returned and the queued focus change has been handled.
-#    KEY_DELAY_MS just widens the gap via a timer thread. Safe off the main
-#    thread because keybd_event is a pure Win32 call touching no c4d API.
+# 3. The editor does have hardcoded framing keys - 's' frames the selection,
+#    'h' frames the whole graph - and an earlier version of this script drove
+#    them with a synthetic Windows keystroke. That worked, but it was
+#    Windows-only, it had to be timed against the editor taking keyboard
+#    focus, it gave no control over zoom, and if focus landed elsewhere the
+#    keystroke framed the 3D viewport instead. Writing the transform directly
+#    has none of those problems. Keep 's' in mind only as a manual fallback.
 #
-#    A C4D-side deferral is not an option anyway: RegisterMessagePlugin fails
-#    from the Script Manager with "cannot find pyp file", so there is no
-#    MessageData listener for SpecialEventAdd to wake. Plugin registration
-#    needs a real .pyp file.
-#
-# 4. S and H are the 3D viewport's framing keys too, so if the editor doesn't
-#    take keyboard focus the keystroke frames the viewport instead and zooms
-#    the view you were working in.
-#
-#    This is NOT guarded against, and can't easily be. Detecting it means
-#    reading the camera after the key has been processed, which happens on a
-#    later message loop with no callback available to run there - and doing it
-#    from the timer thread would mean calling the c4d API off the main thread.
-#    An earlier version of this script snapshotted and restored the camera
-#    around a synchronous CallCommand; that guard cannot be carried over to an
-#    asynchronous keystroke.
-#
-#    So if it misses, your viewport zooms and you undo it by hand. The way to
-#    avoid the miss is to give the editor focus yourself: keep the XPresso
-#    window open and run this from a keyboard shortcut.
-#
-# 5. Zoom level still can't be set directly, and this doesn't try. GvNodeGUI
-#    is the graph view's UI layer in the C++ SDK and exposes GetZoom() with no
-#    matching setter, and it isn't bridged to Python anyway. If S lands you
-#    closer than you like, switch CENTRE_KEY to "H".
+# 4. Coordinates are per-canvas: each XGroup has its own. A node inside a
+#    group cannot be centred by scrolling the root canvas, because it isn't on
+#    it. When the match is nested, this centres on its top-level ancestor
+#    instead - the group you need to open - and says so.
 
 
-def collect_nodes(node, out):
-    """Recursively collect every GvNode, including those nested in XGroups."""
+def collect_nodes(node, out, top=None):
+    """
+    Every GvNode, paired with the top-level node it sits under.
+
+    The pairing matters because graph coordinates are relative to the
+    containing group's canvas, so only top-level nodes can be centred on
+    directly.
+    """
     while node:
-        out.append(node)
-        collect_nodes(node.GetDown(), out)
+        anchor = top if top is not None else node
+        out.append((node, anchor))
+        collect_nodes(node.GetDown(), out, anchor)
         node = node.GetNext()
 
 
@@ -200,57 +180,61 @@ def all_xpresso_tags(doc):
     return found
 
 
-# --- keystroke ------------------------------------------------------------
+# --- view transform -------------------------------------------------------
 
-def send_key(ch):
+def operator_container(node):
     """
-    Tap a key at the OS level, so it lands in whatever has keyboard focus.
-    The editor's framing keys aren't commands, so this is the only way to
-    reach them. Returns False if the platform can't do it.
+    A node's operator container - position, size, and on the root node the
+    editor's view transform. Three containers deep and undocumented.
     """
-    if ctypes is None or not hasattr(ctypes, "windll"):
-        return False
-    vk = VK_CODES.get(ch.upper())
-    if vk is None:
-        return False
     try:
-        user32 = ctypes.windll.user32
-        scan = user32.MapVirtualKeyW(vk, 0)
-        user32.keybd_event(vk, scan, 0, 0)          # down
-        user32.keybd_event(vk, scan, 2, 0)          # up (KEYEVENTF_KEYUP)
-    except Exception as exc:
-        print("couldn't send the '%s' key: %s" % (ch, exc))
-        return False
-    return True
-
-
-# --- deferred delivery ----------------------------------------------------
-
-def send_key_later(ch, ms):
-    """
-    Send the key from a timer thread, so it lands well after this script has
-    returned and C4D has processed the queued focus change.
-
-    A plugin-based deferral is not available here: RegisterMessagePlugin
-    fails from the Script Manager with "cannot find pyp file", so
-    SpecialEventAdd has nothing to wake. It is not needed either - keybd_event
-    posts to the *Windows* input queue, which C4D drains on its next message
-    pump, so delivery is already deferred past the end of this script. The
-    timer only widens that gap to make the ordering comfortable.
-
-    Safe off the main thread because keybd_event is a pure Win32 call and
-    touches no c4d API. Nothing in this function may call into c4d.
-    """
-    if ms <= 0:
-        return send_key(ch)
-    if threading is None:
-        return send_key(ch)
-    try:
-        t = threading.Timer(ms / 1000.0, lambda: send_key(ch))
-        t.daemon = True
-        t.start()
+        data = node.GetDataInstance()
+        if data is None:
+            return None
+        shape = data.GetContainerInstance(c4d.ID_SHAPECONTAINER)
+        if shape is None:
+            return None
+        return shape.GetContainerInstance(c4d.ID_OPERATORCONTAINER)
     except Exception:
-        return send_key(ch)
+        return None
+
+
+def node_centre(node):
+    """The centre of a node's box, in its canvas's coordinates."""
+    bc = operator_container(node)
+    if bc is None:
+        return None
+    try:
+        x = float(bc[NODE_POS_IDS[0]])
+        y = float(bc[NODE_POS_IDS[1]])
+        w = float(bc[NODE_SIZE_IDS[0]])
+        h = float(bc[NODE_SIZE_IDS[1]])
+    except Exception:
+        return None
+    return (x + w / 2.0, y + h / 2.0)
+
+
+def centre_view(master, point, zoom):
+    """
+    Put `point` (in root-canvas coordinates) at the middle of the editor.
+
+    screen_px = (graph_pos - scroll) * zoom, so the top-left corner we want is
+    the point minus half a viewport's worth of graph units.
+    """
+    root = master.GetRoot()
+    if root is None:
+        return False
+    bc = operator_container(root)
+    if bc is None:
+        return False
+
+    try:
+        bc.SetFloat(VIEW_ZOOM_ID, float(zoom))
+        bc.SetFloat(VIEW_SCROLL_IDS[0], point[0] - VIEW_W / (2.0 * zoom))
+        bc.SetFloat(VIEW_SCROLL_IDS[1], point[1] - VIEW_H / (2.0 * zoom))
+    except Exception as exc:
+        print("couldn't write the view transform: %s" % exc)
+        return False
     return True
 
 
@@ -268,9 +252,9 @@ def reveal(matched):
     if not FOCUS_XPRESSO_EDITOR:
         return
 
-    host, tag, master = matched[0]
+    host, tag, master, anchors, nested = matched[0]
     if len(matched) > 1:
-        others = ", ".join("'%s'" % h.GetName() for h, _, _ in matched[1:])
+        others = ", ".join("'%s'" % m[0].GetName() for m in matched[1:])
         print("showing '%s' - also matched in %s" % (host.GetName(), others))
 
     # Make the XPresso tag the active one first, so the editor is pointed at
@@ -289,16 +273,26 @@ def reveal(matched):
     if not CENTRE_ON_MATCH:
         return
 
-    # Ask for keyboard focus. Queued, not immediate - which is why the
-    # keystroke below is deferred rather than sent on the next line.
-    c4d.CallCommand(XPRESSO_EDITOR_ID)
+    # Centre on the bounding box of everything we're aiming at, so multiple
+    # hits all end up on screen rather than just the first.
+    points = [p for p in (node_centre(a) for a in anchors) if p]
+    if not points:
+        print("couldn't read node positions - nodes are still selected")
+        return
 
-    if send_key_later(CENTRE_KEY, KEY_DELAY_MS):
-        print("centring: '%s' queued for the editor (+%dms)."
-              % (CENTRE_KEY, KEY_DELAY_MS))
-    else:
-        print("centring needs Windows - nodes are still selected, press '%s' "
-              "in the editor yourself." % CENTRE_KEY)
+    xs = [p[0] for p in points]
+    ys = [p[1] for p in points]
+    target = ((min(xs) + max(xs)) / 2.0, (min(ys) + max(ys)) / 2.0)
+
+    if centre_view(master, target, CENTRE_ZOOM):
+        graphview.RedrawMaster(master)
+        c4d.EventAdd()
+        if nested:
+            print("centred on the group holding the match at %d%% - the match "
+                  "itself is inside it" % round(CENTRE_ZOOM * 100))
+        else:
+            print("centred on (%.0f, %.0f) at %d%%"
+                  % (target[0], target[1], round(CENTRE_ZOOM * 100)))
 
 
 def main():
@@ -324,7 +318,7 @@ def main():
         return
 
     total_hits = 0
-    matched = []          # (host, tag, master) for every graph that had a hit
+    matched = []          # (host, tag, master, anchors, nested)
 
     for host, tag in tags:
         master = tag.GetNodeMaster()
@@ -334,20 +328,20 @@ def main():
         if not root:
             continue
 
-        nodes = []
-        collect_nodes(root.GetDown(), nodes)
+        pairs = []
+        collect_nodes(root.GetDown(), pairs)
 
-        print("\nXPresso on '%s'  -  %d nodes" % (host.GetName(), len(nodes)))
+        print("\nXPresso on '%s'  -  %d nodes" % (host.GetName(), len(pairs)))
 
         exact = []
         by_name = []
-        for node in nodes:
+        for node, anchor in pairs:
             for linked in node_links(node, doc):
                 if linked == target:
-                    exact.append(node)
+                    exact.append((node, anchor))
                     break
                 if linked.GetName() == target_name:
-                    by_name.append(node)
+                    by_name.append((node, anchor))
                     break
 
         hits = exact if exact else by_name
@@ -355,20 +349,30 @@ def main():
             print("  (no exact match - falling back to name match)")
 
         # report + select
-        for node in nodes:
+        for node, _ in pairs:
             node.DelBit(c4d.BIT_ACTIVE)
 
-        for node in hits:
+        for node, _ in hits:
             node.SetBit(c4d.BIT_ACTIVE)
             print("  selected: %s" % node.GetName())
 
         total_hits += len(hits)
-        if hits:
-            matched.append((host, tag, master))
 
-        if not hits:
+        if hits:
+            # Centre on each hit that sits on the root canvas; for anything
+            # nested, aim at its top-level ancestor instead - the group you
+            # have to open to reach it.
+            anchors = []
+            nested = False
+            for node, anchor in hits:
+                if anchor is not node:
+                    nested = True
+                if anchor not in anchors:
+                    anchors.append(anchor)
+            matched.append((host, tag, master, anchors, nested))
+        else:
             # nothing matched - dump what IS in there so you can see why
-            for node in nodes:
+            for node, _ in pairs:
                 refs = [l.GetName() for l in node_links(node, doc)]
                 print("  %-28s %s" % (node.GetName(), " -> " + ", ".join(refs) if refs else ""))
 

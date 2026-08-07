@@ -24,23 +24,39 @@ Scanning every id in the container rather than hardcoding `GV_OBJECT_OBJECT_ID` 
 
 **`GvNode` has no `GetTitle()` or `SetSelected()`.** Use `GetName()` for the label, and `SetBit(c4d.BIT_ACTIVE)` / `DelBit(c4d.BIT_ACTIVE)` for selection. Call `c4d.modules.graphview.RedrawMaster(master)` afterwards or the editor won't repaint and the selection change is invisible.
 
-## Driving the editor's view (2026-08-07, corrected)
+## Driving the editor's view (2026-08-07, corrected twice)
 
-**Centring the graph on a node works.** An earlier version of this file said it was impossible. That was wrong, and it was wrong because it assumed the mechanism had to be a command.
-
-**The editor's framing is a hardcoded dialog key, not a command plugin.** In the XPresso editor, `S` frames the selection and `H` frames the whole graph. Neither is registered as a command, which is why no command id reaches them — and why they can't be bound in Customise Commands either. Send the keystroke at OS level and it lands:
+**The view transform is readable and writable.** An earlier version of this file said centring was impossible and that zoom "cannot be set by any plugin in any language". Both were wrong. It all lives on the **root XGroup's operator container**:
 
 ```python
-import ctypes
-user32 = ctypes.windll.user32
-scan = user32.MapVirtualKeyW(0x53, 0)   # 0x53 = S, 0x48 = H
-user32.keybd_event(0x53, scan, 0, 0)    # down
-user32.keybd_event(0x53, scan, 2, 0)    # up
+bc = (master.GetRoot().GetDataInstance()
+        .GetContainerInstance(c4d.ID_SHAPECONTAINER)
+        .GetContainerInstance(c4d.ID_OPERATORCONTAINER))
+
+bc[104]        # zoom, float, 1.0 = 100%
+bc[102], bc[103]   # view top-left, in graph units
+bc[100], bc[101]   # the root XGroup's OWN position - not the view
 ```
 
-Windows-only. `find_xpresso_node-OM2XP.py` uses exactly this.
+The mapping, measured against a live 2026 session:
 
-**No command id centres an XPresso graph.** Established by enumerating all 3,390 command plugins in a live 2026 install (`probe_xpresso_commands.py`). The entire classic XPresso family is four entries:
+```
+screen_px = (graph_pos - scroll) * zoom
+```
+
+so centring a point is `scroll = point - viewport / (2 * zoom)`.
+
+**How it was identified.** Sampling every container while the mouse zoomed showed exactly one value moving: id 104. Panning moved only 102/103. The clincher for the units was that `scroll * zoom` lands on exact integers (`-275.00, -183.00` on the calibration sample) — the editor keeps scroll in whole pixels and stores pixels/zoom here.
+
+**Writing the view does not edit the graph.** Shifting scroll by thousands of units and root position by hundreds changed **0 of 80** node coordinates on a production rig. Verified explicitly, because 100/101 are node-position ids everywhere else and confusing them with 102/103 would silently offset a whole graph.
+
+**The viewport size cannot be queried**, so it has to be supplied. `find_xpresso_node-OM2XP.py` carries `VIEW_W`/`VIEW_H`. Getting it wrong lands the node off-centre, never off-screen. Recalibrate by centring a node by hand, reading `scroll` and `zoom`, then `VIEW_W = (centre_x - scroll_x) * zoom * 2`.
+
+**Coordinates are per-canvas.** Each XGroup has its own, so a nested node cannot be centred by scrolling the root — aim at its top-level ancestor instead.
+
+### Dead ends, so nobody repeats them
+
+**There is no command that centres an XPresso graph.** Enumerating all 3,390 command plugins (`probe_xpresso_commands.py`) shows the entire classic XPresso family is:
 
 | id | name |
 |---|---|
@@ -49,19 +65,17 @@ Windows-only. `find_xpresso_node-OM2XP.py` uses exactly this.
 | 1001148 | *(blank — the editor itself)* |
 | 1001149 | XPresso |
 
-None of them frames anything. There are exactly **three** Zoom In/Out pairs in the whole list: `14063`/`14064` (3D viewport), `1016010`/`1016011`, and `465002325`/`465002326`. That third block also owns `Center Selected`, `Frame Selected`, `Center All`, `Arrange Selected Nodes` and `Show All Ports` — node-graph vocabulary — but it belongs to the **new node editor** (scene and material nodes), not to classic XPresso. There is no fourth block.
+None frames anything. There are exactly three Zoom In/Out pairs in the list: `14063`/`14064` (3D viewport), `1016010`/`1016011`, and `465002325`/`465002326`. The third also owns `Center Selected`, `Arrange Selected Nodes` and `Show All Ports` — but it is the **new node editor** (scene and material nodes), not XPresso.
 
-**`13038` is a 3D viewport command.** Do not use it for graph work. Per Ferdinand at Maxon it "is grouped together with a whole architecture of viewport commands which first check if they can get hold of the active viewport" ([developers.maxon.net/topic/13176](https://developers.maxon.net/topic/13176)). It frames the viewport whichever manager has focus. Any theory about manager focus built on top of it — and the previous version of this file was full of them — is chasing the wrong thing.
+**`13038` is a 3D viewport command.** Per Ferdinand at Maxon it "is grouped together with a whole architecture of viewport commands which first check if they can get hold of the active viewport" ([topic/13176](https://developers.maxon.net/topic/13176)). It frames the viewport whichever manager has focus. Every "manager focus" theory built on it was chasing the wrong thing.
 
-**The keystroke must arrive after the script returns**, because keyboard focus is queued: `CallCommand(1001148)` asks for the editor to become active but the activation is processed on the next message loop. This costs nothing to arrange — `keybd_event` posts to the *Windows* input queue, which C4D only drains on its next message pump, so delivery is already deferred. A timer thread adds ~120ms of margin. Safe off the main thread because `keybd_event` touches no c4d API; nothing else may go in that thread.
+**The editor's `s` / `h` keys do frame the graph** — they are hardcoded dialog keys, not commands, which is why no id reaches them and why they can't be bound in Customise Commands. Driving them with a synthetic Windows keystroke works, and was the shipped solution briefly. It is strictly worse than writing the transform: Windows-only, has to be timed against the editor taking keyboard focus, gives no control over zoom, and frames the 3D viewport if focus lands elsewhere. Keep `s` as a manual fallback only.
 
-**A C4D-side deferral is not available to a script.** `RegisterMessagePlugin` fails from the Script Manager with `cannot find pyp file - plugin registration failed`, so there is no `MessageData` listener for `SpecialEventAdd` to wake. Plugin registration needs a real `.pyp`. Also note `c4d.PLUGINTYPE_MESSAGE` does not exist in 2026 Python (C++ SDK only) — `FindPlugin`'s type argument is optional, so omit it.
+**A script cannot defer work into a C4D message loop.** `RegisterMessagePlugin` fails from the Script Manager with `cannot find pyp file - plugin registration failed`, so `SpecialEventAdd` has nothing to wake. Also `c4d.PLUGINTYPE_MESSAGE` does not exist in 2026 Python (C++ SDK only) — `FindPlugin`'s type argument is optional, so omit it.
 
-**The viewport guard could not be carried over.** `S` and `H` are the 3D viewport's framing keys too, so a keystroke that misses the editor zooms the viewport. The old snapshot-and-restore guard worked only because `CallCommand` was synchronous; with an asynchronous keystroke there is no main-thread moment to read the camera afterwards, and reading it from the timer thread would mean calling the c4d API off-thread. Avoid the miss instead: keep the editor open and run from a keyboard shortcut.
+**`master.GetPrefs()` id 105 is not zoom.** It reads `80.0` and looks like a percentage, but holds steady while the view zooms. Six unrelated settings, as originally recorded.
 
-**Zoom — open question.** `GvNodeGUI` (the C++ graph view UI layer) has `GetZoom()` with no setter and isn't bridged to Python. But `GvNodeMaster.GetPrefs()` returns `100=1, 101=0, 102=0, 103=1001, 104=200, 105=80.0`, and **`105 = 80.0` has the shape of a zoom percentage** — previously dismissed as unrelated without testing. `SetPrefs` is in the module exports. `probe_xpresso_zoom.py` samples these while the mouse zooms; if 105 tracks, zoom may be both readable and writable. Untested as of this writing.
-
-**Method note.** The single early "it centred once" observation that the previous session built on was never reproduced, and neither was any command-based theory. The thing that actually broke this open was enumerating the real command list and noticing the editor contributes *nothing* to it — which reframes the question from "which command?" to "it isn't a command". Enumerate before theorising.
+**Method note.** Three sessions were spent on "which command is it?" when the answer was that it isn't a command. What broke it open was enumerating the actual command list and noticing XPresso contributes *nothing* to it, then dumping every container while the mouse moved and diffing. Enumerate and diff before theorising — and treat one unreproduced observation as noise.
 
 ## Node layout
 
