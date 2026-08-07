@@ -25,13 +25,25 @@ Select an object (or tag) in the Object Manager, run the script, and it selects 
 
 It searches **every** XPresso tag in the scene, so you don't need to know which rig the object is wired into or have the right tag selected first. Nodes nested inside XGroups are found too. Matching is on object identity first, falling back to a name match if nothing exact turns up — useful in a rig with several objects called `Sweep`. If nothing matches, it prints every node and what it references so you can see why.
 
-It also **brings the XPresso editor forward** on the graph that matched. Where several graphs matched, the first is shown and the rest are named in the console — their nodes stay selected, so switching to one of those tags shows the selection already made.
+It then **brings the XPresso editor forward** on the graph that matched and **centres the view on the node**, at a zoom you choose (`CENTRE_ZOOM`, default 200%). Where several graphs matched, the first is shown and the rest are named in the console — their nodes stay selected, so switching to one of those tags shows the selection already made.
 
-**It does not centre the view on the node, because that cannot be done from a script in 2026.** `CallCommand(13038)` ("Frame Selected Elements") is the only command that scrolls a graph to its selection, and it dispatches to whichever manager is *active* — and nothing a script can do makes the XPresso editor active. Tried and failed against a live session: `13038` alone; `OpenDialog(1001148)` then `13038`; `CallCommand(1001148)` then `13038` (activation is queued for the next message loop, so the framing still reaches the old manager); `SendCoreMessage` with `COREMSG_CINEMA_EXECUTEEDITORCOMMAND` + `EXECUTEMANAGER` (accepted, does nothing); and `CloseDialog` + `OpenDialog` + `13038`. `CENTRE_ON_MATCH` is left in the source, switchable, in case a later version fixes it.
+**Centring works by writing the editor's view transform directly**, which lives on the root XGroup's operator container — `104` is zoom, `102`/`103` are the view position:
 
-The workflow that works: run the script to select the node, then frame it yourself in the editor — the selection is already made and waiting. `PROTECT_VIEWPORT` guards the one dangerous case if you do switch centring on: a missed `13038` can frame the selected object in the **3D viewport** and zoom the view you were working in, so the camera's local matrix is snapshotted and restored if it moves (0.0000 units across repeated runs). Snapshot the *local* matrix, not the global one — writing a global matrix back converts through the parent and leaves drift on every run.
+```
+view_centre_in_graph_units = -scroll        # so centring is scroll = -point
+```
 
-**Zoom cannot be set at all**, so nothing here tries. `GvNodeGUI`, the graph view's UI layer in the C++ SDK, exposes `GetZoom()` with no setter, and isn't bridged to Python in the first place; the editor's View > Zoom entries have no command ids; and the only reachable zoom commands drive the 3D viewport.
+No viewport size is involved, so there is nothing to calibrate, and it is platform-independent.
+
+That is worth spelling out because the obvious routes are all dead ends, documented in [docs/xpresso-api-notes.md](docs/xpresso-api-notes.md):
+
+- **No command centres an XPresso graph.** Enumerating all 3,390 command plugins in a live 2026 install turns up four XPresso entries, none of which frames anything. The `Frame`/`Center`/`Zoom` block at `465002xxx` belongs to the *new* node editor (scene and material nodes), not XPresso.
+- **`13038` "Frame Selected Elements" is a 3D viewport command**, not the editor's. Per Maxon it checks for the active viewport first, so it frames the viewport whichever manager has focus — it can never centre a graph, and any theory about manager focus built on it is chasing the wrong thing.
+- **The editor's `s` and `h` keys do frame the graph**, but they're hardcoded dialog keys rather than commands, which is why no id reaches them and why they can't be bound in Customise Commands.
+
+**Zoom is writable too** — `104`, where `1.0` is 100%. Earlier notes in this repo claimed zoom could not be set by any plugin in any language; that was wrong.
+
+Writing the view is navigation, not editing: shifting the view by thousands of units moved 0 of 80 node coordinates on a production rig. Note that ids `100`/`101` on the root are the XGroup's own position and **do** move the graph's contents — don't confuse them with `102`/`103`.
 
 Written for a 61-node rig (since grown to 80) where hunting for "which node drives this null?" by eye was the bottleneck.
 
@@ -40,6 +52,12 @@ Written for a 61-node rig (since grown to 80) where hunting for "which node driv
 The reverse lookup. Select node(s) in the XPresso editor, run the script, and it selects whatever they reference — object, tag or material — in the Object Manager or Material Manager.
 
 It expands collapsed hierarchy on the way, so the target is actually visible on screen rather than selected somewhere inside a folded group. Handles multiple selected nodes across multiple graphs at once, de-duplicates targets, and prints the full path of everything it selected.
+
+### `probe_xpresso_view.py`, `probe_xpresso_commands.py` — diagnostics
+
+Not tools, but the instruments that worked the view transform out, kept because the same questions will come up again.
+
+`probe_xpresso_view.py` reads and writes zoom, view position and the root XGroup's position, reporting each separately so they can't be confused. `probe_xpresso_commands.py` enumerates every command plugin and logs which are enabled, which is how "XPresso registers no view commands at all" was established rather than assumed.
 
 ## One at a time, not all at once
 
