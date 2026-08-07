@@ -2,9 +2,9 @@
 
 A background listener for Cinema 4D. It starts when C4D starts, watches the active document for the whole session, and names things so you don't have to. There's no button and nothing to launch.
 
-**Version:** 1.4.0 · **Plugin ID:** `1069542` (registered with Maxon) · **Requires:** Cinema 4D 2026, Python 3.11
+**Version:** 1.5.0 · **Plugin ID:** `1069542` (registered with Maxon) · **Requires:** Cinema 4D 2026, Python 3.11
 
-Four features, each independently switchable:
+Five features, each independently switchable:
 
 | | Feature | Setting |
 |---|---|---|
@@ -12,6 +12,7 @@ Four features, each independently switchable:
 | 2 | [Text object renamer](#2-text-object-renamer) — text objects name themselves after their text | `AUTO_NAME_TEXT` |
 | 3 | [Auto-enumerator](#3-auto-enumerator) — duplicates count up instead of gaining `.1` | `AUTO_INCREMENT` |
 | 4 | [Multi-wire](#4-multi-wire) — wire (or unwire) one selected XPresso node, do them all | `MULTI_WIRE` |
+| 5 | [Duplicate-wire](#5-duplicate-wire) — a copied XPresso node keeps what was feeding it | `DUPLICATE_WIRE` |
 
 ---
 
@@ -129,7 +130,31 @@ A node that won't release its port says so in the console rather than failing qu
 
 ---
 
-## How the four interact
+## 5. Duplicate-wire
+
+Copy an XPresso node — Ctrl-drag it, or copy and paste — and C4D gives you the node and its ports but none of its wiring. Every input has to be dragged back in by hand. This puts them back, so a duplicated node arrives already fed by whatever fed the original.
+
+**Only incoming connections, and that isn't a preference.** An XPresso input port holds exactly one wire. Connecting the copy's *output* to something the original already feeds would unplug the original — so outgoing wires can't be duplicated, only stolen. The copy gets its inputs; what it drives is left for you to wire.
+
+**Finding the copy is the whole problem.** A graph node has no identity that survives from one moment to the next: `GvNode` has no `GetGUID()` — that's a `BaseObject` method — and its position in the node walk renumbers the moment anything is added or removed. What a node *does* have is its own `BaseContainer`, and C4D clones that along with the node. So every node is stamped with a serial under the plugin id, and **a copy turns up carrying its original's stamp**. One stamp on two nodes is a duplication, and it says which came from which. The copy is then re-stamped, so the graph goes back to one serial per node and the next copy of either is caught the same way.
+
+That also means there are no false positives: a node you create fresh is a new node with no stamp, not a copy of anything, however much it resembles what's already in the graph.
+
+**Duplicating a whole selection works too.** C4D keeps the wires that ran *between* the copied nodes, so those arrive intact; the plugin restores only the inputs that came from outside the copied set. Of the nodes sharing a stamp, the one with the most incoming connections is taken to be the original.
+
+**It only ever adds.** A port that is already fed — because the copy came with that wire, or because a previous pass did it — is left exactly as it is. Unlike multi-wire, this feature never removes a connection, so it can't lose work.
+
+Ports are matched by **name**, for the same reason multi-wire does it: port ids behave like slot numbers, so the same parameter has a different id on the copy than on the original. A copy normally arrives with the same ports as its original, so creating one is a fallback rather than the usual path.
+
+Set `DUPLICATE_WIRE_DEBUG = True` to print the stamp census per graph and which node was taken to be the copy of which.
+
+```
+[Chroma Utilities] XPresso on 'RIG': 'Object' -> Cube_02 kept its 'Visibility' input
+```
+
+---
+
+## How the five interact
 
 Features 1–3 rename objects, and only one of them ever renames a given object on a given pass, in this order:
 
@@ -139,7 +164,7 @@ Features 1–3 rename objects, and only one of them ever renames a given object 
 
 The enumerator runs last and only if nothing more specific claimed the name — a duplicated default-named Extrude with a child in it is more useful taking that child's name than becoming `Extrude_02`.
 
-Feature 4 is independent — it operates on XPresso graphs, not object names, and doesn't interact with the other three.
+Features 4 and 5 operate on XPresso graphs rather than object names, and don't interact with the first three. They do share a pass, and the order there matters: **the duplicate check runs first, and if it wired anything, multi-wire sits that pass out.** A node arriving or leaving also renumbers the node walk, which is what a connection is keyed on — so on any structural change the whole graph reads as vanished and reappeared at once. Mirroring off that diff would be nonsense, so the graph is quietly re-baselined instead.
 
 ## It won't fight you
 
@@ -164,8 +189,8 @@ Constants at the top of the `.pyp`:
 | `MULTI_WIRE_DISCONNECT` | `True` | mirror disconnections as well as connections |
 | `MULTI_WIRE_REMOVE_EMPTY_PORTS` | `"ask"` | `True` / `False` / `"ask"` — what to do with a port left empty by a mirrored disconnection |
 | `MULTI_WIRE_DEBUG` | `False` | print port ids, and list a node's actual ports when one can't be matched |
-
-Settings live in the source, so changing one means a rebuild — see [Source and building](#source-and-building).
+| `DUPLICATE_WIRE` | `True` | feature 5 on/off |
+| `DUPLICATE_WIRE_DEBUG` | `False` | print the stamp census, and which node was taken to be the copy of which |
 | `TEXT_WORD_COUNT` | `4` | words of text to use as the name |
 | `TEXT_MAX_CHARS` | `32` | hard cap on a generated name |
 | `INCREMENT_SEPARATOR` | `"_"` | what sits between stem and number |
@@ -173,6 +198,8 @@ Settings live in the source, so changing one means a rebuild — see [Source and
 | `SKIP_GENERATOR_TYPES` | `set()` | types that keep their default name — add `c4d.Onull` if you'd rather nulls stayed called `Null` |
 | `TIMER_MS` | `300` | how often it looks |
 | `VERBOSE` | `False` | print every rename |
+
+Settings live in the source, so changing one means a rebuild — see [Source and building](#source-and-building).
 
 ## Install
 
@@ -185,7 +212,7 @@ Drop the `chroma_utilities` folder — containing `chroma_utilities.pypv` — in
 Restart Cinema 4D. On load the console prints the version and which features are active, so you can tell at a glance whether you're running the build you think you are:
 
 ```
-[Chroma Utilities] v1.4.0 listening - parent renamer, text renamer, auto-enumerator, multi-wire, multi-unwire
+[Chroma Utilities] v1.5.0 listening - parent renamer, text renamer, auto-enumerator, multi-wire, multi-unwire, duplicate-wire
 ```
 
 If a feature is switched off it's absent from that list. `FAILED to register` in place of `listening` means the plugin loaded but C4D rejected the registration.
@@ -210,7 +237,7 @@ The positional `stub.py` is required but its contents don't matter (`pass` is en
 
 A `c4d.plugins.MessageData` plugin registered with `RegisterMessagePlugin`. C4D loads it at startup and calls `CoreMessage()` for the rest of the session; `GetTimer()` adds a 300 ms tick on top of the scene-change messages. This is the supported way to run continuously in the background — `SceneHookData`, the other candidate, is not exposed in the 2026 Python SDK.
 
-Object identity comes from `GetGUID()`, which is derived from the object's marker and stays stable across calls, rather than `id()` on the Python wrapper, which does not.
+Object identity comes from `GetGUID()`, which is derived from the object's marker and stays stable across calls, rather than `id()` on the Python wrapper, which does not. **XPresso nodes get no such thing** — `GetGUID()` is a `BaseObject` method and `GvNode` doesn't inherit it — so graph nodes are identified by their position in the node walk within a pass, and by a stamp written into their own container across passes (see [feature 5](#5-duplicate-wire)).
 
 ## Known limitations
 
@@ -218,6 +245,8 @@ Object identity comes from `GetGUID()`, which is derived from the object's marke
 - **MoText's text parameter is probed, not assumed** — see feature 2 above.
 - **Multi-wire replaces existing connections, and that isn't undoable either.** If a target port was already fed by something, that connection is removed. Combined with the no-undo limitation above, this is the one feature that can lose work — set `MULTI_WIRE = False` if you'd rather not risk it on a rig you can't easily rebuild.
 - **It walks the whole object tree every tick**, and every XPresso graph too. Fine on ordinary scenes; on a very heavy one this is the first thing to optimise, by gating the walk on a document dirty check.
+- **Duplicate-wire writes a stamp into every XPresso node it sees**, in that node's own container under the plugin id. It's a short string per node and it saves with the scene, which is what makes identity survive a reload — but it does mean an untouched graph is modified the first time the plugin looks at it. Set `DUPLICATE_WIRE = False` if you'd rather it didn't.
+- **Restored connections are not undoable either**, for the same reason renames aren't. Ctrl+Z after a duplication won't unpick the inputs it put back.
 
 ## Credit
 
