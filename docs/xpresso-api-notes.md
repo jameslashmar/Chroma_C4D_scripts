@@ -24,48 +24,44 @@ Scanning every id in the container rather than hardcoding `GV_OBJECT_OBJECT_ID` 
 
 **`GvNode` has no `GetTitle()` or `SetSelected()`.** Use `GetName()` for the label, and `SetBit(c4d.BIT_ACTIVE)` / `DelBit(c4d.BIT_ACTIVE)` for selection. Call `c4d.modules.graphview.RedrawMaster(master)` afterwards or the editor won't repaint and the selection change is invisible.
 
-## Driving the editor's view — what is and isn't possible (2026-08-07)
+## Driving the editor's view (2026-08-07, corrected)
 
-Established by probing a live 2026 session, not from docs. All of it is negative space worth knowing before you spend an evening on it.
+**Centring the graph on a node works.** An earlier version of this file said it was impossible. That was wrong, and it was wrong because it assumed the mechanism had to be a command.
 
-> **Read this first: the framing command can hit the 3D viewport instead, so undo it afterwards.** `OpenDialog` only makes the editor active when it actually *opens* it — if the XPresso window is already open it returns `True` and activates nothing. `CallCommand(13038)` then falls through to whichever manager *is* active, and when that is the 3D viewport it frames the selected object there and **zooms the user's viewport**. There is no API to ask which manager is active, so the miss cannot be predicted.
->
-> It can be reverted, which is what makes the feature shippable: snapshot the active camera's matrix before the call and restore it if it changed. Use the **local** matrix (`GetMl`/`SetMl`), not the global one — `SetMg` converts through the camera's parent and does not round-trip exactly, leaving drift on every run. Measured over repeated runs, `GetMl`/`SetMl` holds the viewport at 0.0000 units of movement. `c4d.Matrix.__eq__` is a value comparison, so a plain `==` is a sound change test.
+**The editor's framing is a hardcoded dialog key, not a command plugin.** In the XPresso editor, `S` frames the selection and `H` frames the whole graph. Neither is registered as a command, which is why no command id reaches them — and why they can't be bound in Customise Commands either. Send the keystroke at OS level and it lands:
 
-**Centring the view on a node cannot be done from a script.** `c4d.CallCommand(13038)` — "Frame Selected Elements" — is the only command that scrolls a graph to its selection, and it dispatches to whichever manager is **active**. A script run has no manager focus, and nothing available in Python makes the XPresso editor active. Every route, tried against a live 2026 session:
+```python
+import ctypes
+user32 = ctypes.windll.user32
+scan = user32.MapVirtualKeyW(0x53, 0)   # 0x53 = S, 0x48 = H
+user32.keybd_event(0x53, scan, 0, 0)    # down
+user32.keybd_event(0x53, scan, 2, 0)    # up
+```
 
-| Attempt | Result |
+Windows-only. `find_xpresso_node-OM2XP.py` uses exactly this.
+
+**No command id centres an XPresso graph.** Established by enumerating all 3,390 command plugins in a live 2026 install (`probe_xpresso_commands.py`). The entire classic XPresso family is four entries:
+
+| id | name |
 |---|---|
-| `CallCommand(13038)` alone | node selected, view unmoved |
-| `OpenDialog(1001148, master)` then `13038` | appeared to work **once**, never reproduced |
-| `CallCommand(1001145)` then `13038` | `1001145` is the X-Manager, not the editor |
-| `CallCommand(1001148)` then `13038` | `IsCommandEnabled(1001148)` is `True`, so it is a real command, but activation is queued for the next message loop and `13038` still reaches the old manager |
-| `SendCoreMessage` with `COREMSG_CINEMA_EXECUTEEDITORCOMMAND` + `COREMSG_CINEMA_EXECUTEMANAGER` | accepted, returns a `BaseContainer`, executes nothing |
-| `CloseDialog(1001148)` then `OpenDialog` then `13038` | view unmoved |
-| Editor closed **by hand** first, so `OpenDialog` genuinely creates the window, then `13038` | view unmoved |
+| 1001138 | XPresso Pool |
+| 1001145 | XPresso Manager |
+| 1001148 | *(blank — the editor itself)* |
+| 1001149 | XPresso |
 
-That last row matters, because it kills the most plausible theory. Two early tests did centre, and both were runs where `OpenDialog` visibly opened a new floating window — which suggested activation was a side effect of *creating* the dialog, and that the feature would work once per manually-closed window. Tested directly with every XPresso window closed beforehand: it still does not centre. So the two early successes remain unexplained, and no proposed mechanism survives contact with them.
+None of them frames anything. There are exactly **three** Zoom In/Out pairs in the whole list: `14063`/`14064` (3D viewport), `1016010`/`1016011`, and `465002325`/`465002326`. That third block also owns `Center Selected`, `Frame Selected`, `Center All`, `Arrange Selected Nodes` and `Show All Ports` — node-graph vocabulary — but it belongs to the **new node editor** (scene and material nodes), not to classic XPresso. There is no fourth block.
 
-Confirmed failing both over a socket-plugin bridge **and** when run normally from Extensions → User Scripts, so it isn't an artefact of the test harness.
+**`13038` is a 3D viewport command.** Do not use it for graph work. Per Ferdinand at Maxon it "is grouped together with a whole architecture of viewport commands which first check if they can get hold of the active viewport" ([developers.maxon.net/topic/13176](https://developers.maxon.net/topic/13176)). It frames the viewport whichever manager has focus. Any theory about manager focus built on top of it — and the previous version of this file was full of them — is chasing the wrong thing.
 
-**When `13038` misses it is not harmless.** It goes to whatever manager *is* active, and if that is the 3D viewport it frames the selected object there and zooms the view the user was working in. Snapshot the active camera's **local** matrix before the call and restore it if it moved (`GetMl`/`SetMl` — `SetMg` converts through the parent and does not round-trip, leaving drift each run). Measured at 0.0000 units across repeated runs.
+**The keystroke must arrive after the script returns**, because keyboard focus is queued: `CallCommand(1001148)` asks for the editor to become active but the activation is processed on the next message loop. This costs nothing to arrange — `keybd_event` posts to the *Windows* input queue, which C4D only drains on its next message pump, so delivery is already deferred. A timer thread adds ~120ms of margin. Safe off the main thread because `keybd_event` touches no c4d API; nothing else may go in that thread.
 
-**Method note.** The single early success was never reproduced under any condition, and building on it cost several rounds of work. One unrepeated positive observation of a UI side effect is noise — reproduce it before designing around it.
+**A C4D-side deferral is not available to a script.** `RegisterMessagePlugin` fails from the Script Manager with `cannot find pyp file - plugin registration failed`, so there is no `MessageData` listener for `SpecialEventAdd` to wake. Plugin registration needs a real `.pyp`. Also note `c4d.PLUGINTYPE_MESSAGE` does not exist in 2026 Python (C++ SDK only) — `FindPlugin`'s type argument is optional, so omit it.
 
-The workable pattern is to select the nodes and let the user frame them; the selection is already made when they get there. **`13038` only pans in any case** — it never zooms to fit, even with every node selected, so zoom can't be driven indirectly by widening the selection first.
+**The viewport guard could not be carried over.** `S` and `H` are the 3D viewport's framing keys too, so a keystroke that misses the editor zooms the viewport. The old snapshot-and-restore guard worked only because `CallCommand` was synchronous; with an asynchronous keystroke there is no main-thread moment to read the camera afterwards, and reading it from the timer thread would mean calling the c4d API off-thread. Avoid the miss instead: keep the editor open and run from a keyboard shortcut.
 
-**Setting the zoom is impossible.** Not merely unexposed:
+**Zoom — open question.** `GvNodeGUI` (the C++ graph view UI layer) has `GetZoom()` with no setter and isn't bridged to Python. But `GvNodeMaster.GetPrefs()` returns `100=1, 101=0, 102=0, 103=1001, 104=200, 105=80.0`, and **`105 = 80.0` has the shape of a zoom percentage** — previously dismissed as unrelated without testing. `SetPrefs` is in the module exports. `probe_xpresso_zoom.py` samples these while the mouse zooms; if 105 tracks, zoom may be both readable and writable. Untested as of this writing.
 
-- `GvNodeGUI` is the graph view's UI layer in the C++ SDK, with `CenterNodes()`, `SetFocus()`, `ShowAllNodes()`, `SetNodePos()` and `GetZoom()` — but **no `SetZoom`**, so no plugin in any language can set it.
-- `GvNodeGUI` isn't bridged to Python anyway. `c4d.modules.graphview` exports exactly eleven names — `CloseDialog, GetDefaultOperatorIcon, GetMaster, GetPrefs, GvNode, GvNodeMaster, GvPort, OpenDialog, RedrawMaster, SetPrefs, XPressoTag` — and `GvNodeMaster` has no GUI accessor.
-- The editor's View > Zoom entries (25/50/75/100%) have **no command ids**. An enumeration of all 3,390 command plugins turns up one percentage ladder (12.5/25/50/100/200/400/800) which belongs to another manager and stays disabled with XPresso frontmost.
-- The only reachable zoom commands, `14063` / `14064`, are the **3D viewport's** — calling them zooms the wrong window.
-
-**Neither prefs container holds the view transform.** `GvNodeMaster.GetPrefs()` returns six unrelated settings (`100=1, 101=0, 102=0, 103=1001, 104=200, 105=80.0`), and `GV_WORLD_CONFIG` carries only undo depth.
-
-**Manager menus aren't reachable from Python.** `c4d.gui.GetMenuResource()` returns a container for `M_EDITOR` only; every manager-menu name tried returns `None`. And `SendCoreMessage` with `COREMSG_CINEMA_EXECUTEEDITORCOMMAND` + `COREMSG_CINEMA_EXECUTEMANAGER` is accepted and returns a container, but does not execute the command in that manager.
-
-The practical upshot: centre, never zoom. The editor's `s` shortcut zooms far too close on a single node; leaving zoom alone means the user sets a comfortable level once and every run lands there.
+**Method note.** The single early "it centred once" observation that the previous session built on was never reproduced, and neither was any command-based theory. The thing that actually broke this open was enumerating the real command list and noticing the editor contributes *nothing* to it — which reframes the question from "which command?" to "it isn't a command". Enumerate before theorising.
 
 ## Node layout
 

@@ -4,87 +4,116 @@ It searches every XPresso tag in the scene, finds the nodes that reference
 that object, selects them in the XPresso editor, brings that editor forward
 on the right graph, and centres the view on what it found.
 
-Cinema 4D 2026 / Python API
+Cinema 4D 2026 / Python API. Windows only for the centring step - see note 2.
 """
 
 import c4d
 from c4d.modules import graphview
 
+try:
+    import ctypes
+except Exception:
+    ctypes = None
+
+try:
+    import threading
+except Exception:
+    threading = None
+
 # --- settings -------------------------------------------------------------
 
 # Bring the XPresso editor forward on the graph that matched, and scroll the
 # view to the node(s) found.
-#
-# CENTRE_ON_MATCH is off because it does not work - see note 3. Every route
-# to it was tried against a live 2026 session and none is reliable. It is
-# left in place, and switchable, in case a later version fixes the
-# underlying problem. Selecting the nodes is the part that does work.
 FOCUS_XPRESSO_EDITOR = True
-CENTRE_ON_MATCH = False
+CENTRE_ON_MATCH = True
 
-# The framing command can miss and hit the 3D viewport instead (see note 3),
-# so the viewport camera is snapshotted before it and put back if it moved.
-# When the framing lands where it should, this is a no-op.
-PROTECT_VIEWPORT = True
+# Which of the editor's built-in view keys to send.
+#   "S" - frame the selection. Centres on the match, but zooms in hard; on a
+#         single node that is usually closer than you want.
+#   "H" - frame the whole graph. Doesn't centre on the match, but the match is
+#         selected and highlighted, so it's easy to spot in context.
+CENTRE_KEY = "S"
+
+# Milliseconds to wait before sending the key, so C4D has drained its event
+# queue and the editor has actually taken keyboard focus. Delivery is already
+# deferred past the end of this script by the Windows input queue - this just
+# widens the gap. Raise it if the key seems to land too early; 0 sends inline.
+KEY_DELAY_MS = 120
 
 XPRESSO_EDITOR_ID = 1001148           # "XPresso Editor" in the plugin list
-CMD_FRAME_SELECTED_ELEMENTS = 13038   # the editor's own framing command
 
-# Two things about this, both established by testing against 2026 rather than
-# assumed, because neither is documented:
+VK_CODES = {"S": 0x53, "H": 0x48}
+
+# 1. There is no command that centres an XPresso graph. Not hidden, not
+#    undocumented - it does not exist.
 #
-# 1. OpenDialog is not optional. CallCommand dispatches to whichever manager
-#    is currently active, and a script run from the Script Manager does not
-#    make the XPresso editor active - so calling the framing command on its
-#    own selects the node and then does nothing visible. Opening the dialog
-#    on the master first is what puts the command in front of the right
-#    editor.
+#    Established by enumerating all 3,390 command plugins in a live 2026
+#    install (probe_xpresso_commands.py). The whole classic XPresso family is
+#    four entries - 1001138 "XPresso Pool", 1001145 "XPresso Manager",
+#    1001148 (the editor, blank name) and 1001149 "XPresso" - and not one of
+#    them frames anything. There are exactly three Zoom In/Out pairs in the
+#    entire list: 14063/14064 (3D viewport), 1016010/1016011, and
+#    465002325/465002326. That last block also owns "Arrange Selected Nodes"
+#    and "Show All Ports", so it belongs to the *new* node editor (scene and
+#    material nodes), not to XPresso. There is no fourth block.
 #
-# 2. The zoom level cannot be set, and this deliberately doesn't try. It is
-#    not that the call is hard to find - it does not exist. GvNodeGUI is the
-#    graph view's UI layer in the C++ SDK and it exposes GetZoom() with no
-#    matching setter, so no plugin in any language can set the zoom. It is
-#    also not bridged to Python at all: the graphview module exports eleven
-#    names and GvNodeGUI (which has CenterNodes() and SetFocus()) is not one
-#    of them. The editor's own View > Zoom entries carry no command ids, and
-#    the only zoom commands that are reachable, 14063 and 14064, belong to
-#    the 3D viewport - calling those zooms the wrong window. Zoom cannot be
-#    driven indirectly either: 13038 only ever pans, and leaves zoom
-#    untouched even with the whole graph selected.
+#    The editor's View menu entries are internal dialog ids, not command
+#    plugins. That is also why they can't be bound in Customise Commands.
 #
-#    That turns out to be the behaviour you want anyway. The editor's own 's'
-#    shortcut zooms hard into a single node, which is usually far too close.
-#    Because this never touches zoom, setting a comfortable level once by
-#    hand means every run afterwards lands the match there.
+#    Do not use 13038 "Frame Selected Elements" for this. It is a 3D VIEWPORT
+#    command - per Ferdinand at Maxon it "is grouped together with a whole
+#    architecture of viewport commands which first check if they can get hold
+#    of the active viewport" (developers.maxon.net/topic/13176). It frames the
+#    viewport whichever manager has focus, so it can never centre a graph, and
+#    any theory about manager focus built on top of it is chasing the wrong
+#    thing.
 #
-# 3. Centring the graph on the node does not work, and CENTRE_ON_MATCH is
-#    off because of it. 13038 goes to whichever manager is active, and
-#    nothing a script can do makes the XPresso editor active. Every route
-#    was tried against a live 2026 session:
+# 2. What does work is the editor's own hardcoded keys. Pressing S in the
+#    XPresso editor frames the selection and H frames the whole graph. They're
+#    built into the dialog rather than registered as commands, which is
+#    exactly why nothing in the command list could reach them.
 #
-#      CallCommand(13038) alone .................. selects, view unmoved
-#      OpenDialog(1001148) then 13038 ............ appeared to work once,
-#                                                  never reproduced
-#      CallCommand(1001145) then 13038 ........... that is the X-Manager,
-#                                                  not the editor
-#      CallCommand(1001148) then 13038 ........... activation is queued for
-#                                                  the next message loop, so
-#                                                  13038 still goes to the
-#                                                  old manager
-#      SendCoreMessage, COREMSG_CINEMA_EXECUTE-
-#      EDITORCOMMAND + ...EXECUTEMANAGER ......... accepted, returns a
-#                                                  container, does nothing
-#      CloseDialog then OpenDialog then 13038 .... view unmoved
+#    So the script sends a synthetic keystroke (Windows keybd_event via
+#    ctypes) instead of calling a command. That makes the centring step
+#    Windows-only; on other platforms it is skipped and reported.
 #
-#    The workflow that does work: run this to select the node, then frame it
-#    yourself in the editor. The selection is already made and waiting.
+# 3. The keystroke has to arrive *after* this script returns, because
+#    keyboard focus is queued. CallCommand(XPRESSO_EDITOR_ID) asks for the
+#    editor to become active, but the activation is processed on the next
+#    message loop - anything sent on the following line reaches whatever had
+#    focus before, usually the Object Manager or the viewport.
 #
-#    PROTECT_VIEWPORT guards the one dangerous case. When 13038 misses and
-#    the 3D viewport happens to be the active manager, it frames the
-#    selected object there and zooms the view you were working in. So the
-#    camera's local matrix is read before the call and put back if it
-#    moved - measured at 0.0000 units across repeated runs. It only matters
-#    if CENTRE_ON_MATCH is switched back on.
+#    That deferral is free here. keybd_event posts to the *Windows* input
+#    queue, and C4D only drains that on its next message pump - which is after
+#    this script has returned and the queued focus change has been handled.
+#    KEY_DELAY_MS just widens the gap via a timer thread. Safe off the main
+#    thread because keybd_event is a pure Win32 call touching no c4d API.
+#
+#    A C4D-side deferral is not an option anyway: RegisterMessagePlugin fails
+#    from the Script Manager with "cannot find pyp file", so there is no
+#    MessageData listener for SpecialEventAdd to wake. Plugin registration
+#    needs a real .pyp file.
+#
+# 4. S and H are the 3D viewport's framing keys too, so if the editor doesn't
+#    take keyboard focus the keystroke frames the viewport instead and zooms
+#    the view you were working in.
+#
+#    This is NOT guarded against, and can't easily be. Detecting it means
+#    reading the camera after the key has been processed, which happens on a
+#    later message loop with no callback available to run there - and doing it
+#    from the timer thread would mean calling the c4d API off the main thread.
+#    An earlier version of this script snapshotted and restored the camera
+#    around a synchronous CallCommand; that guard cannot be carried over to an
+#    asynchronous keystroke.
+#
+#    So if it misses, your viewport zooms and you undo it by hand. The way to
+#    avoid the miss is to give the editor focus yourself: keep the XPresso
+#    window open and run this from a keyboard shortcut.
+#
+# 5. Zoom level still can't be set directly, and this doesn't try. GvNodeGUI
+#    is the graph view's UI layer in the C++ SDK and exposes GetZoom() with no
+#    matching setter, and it isn't bridged to Python anyway. If S lands you
+#    closer than you like, switch CENTRE_KEY to "H".
 
 
 def collect_nodes(node, out):
@@ -171,48 +200,66 @@ def all_xpresso_tags(doc):
     return found
 
 
-def viewport_camera(doc):
-    """
-    The camera the active viewport is looking through, and its matrix. A
-    scene camera if one is active, otherwise the editor camera - framing
-    moves whichever is in use.
-    """
-    if not PROTECT_VIEWPORT:
-        return None
-    try:
-        bd = doc.GetActiveBaseDraw()
-        if bd is None:
-            return None
-        cam = bd.GetSceneCamera(doc) or bd.GetEditorCamera()
-        if cam is None:
-            return None
-        # The local matrix, not the global one. Writing a global matrix back
-        # converts through the camera's parent and doesn't round-trip exactly,
-        # so restoring by SetMg leaves a little drift on every run. The local
-        # matrix is the camera's own state and goes back untouched.
-        return (cam, cam.GetMl())
-    except Exception:
-        return None
+# --- keystroke ------------------------------------------------------------
 
-
-def restore_viewport(state):
-    """Put the viewport back if the framing command moved it. True if it did."""
-    if state is None:
+def send_key(ch):
+    """
+    Tap a key at the OS level, so it lands in whatever has keyboard focus.
+    The editor's framing keys aren't commands, so this is the only way to
+    reach them. Returns False if the platform can't do it.
+    """
+    if ctypes is None or not hasattr(ctypes, "windll"):
         return False
-    cam, before = state
+    vk = VK_CODES.get(ch.upper())
+    if vk is None:
+        return False
     try:
-        if cam.GetMl() == before:
-            return False
-        cam.SetMl(before)
-    except Exception:
+        user32 = ctypes.windll.user32
+        scan = user32.MapVirtualKeyW(vk, 0)
+        user32.keybd_event(vk, scan, 0, 0)          # down
+        user32.keybd_event(vk, scan, 2, 0)          # up (KEYEVENTF_KEYUP)
+    except Exception as exc:
+        print("couldn't send the '%s' key: %s" % (ch, exc))
         return False
     return True
 
 
+# --- deferred delivery ----------------------------------------------------
+
+def send_key_later(ch, ms):
+    """
+    Send the key from a timer thread, so it lands well after this script has
+    returned and C4D has processed the queued focus change.
+
+    A plugin-based deferral is not available here: RegisterMessagePlugin
+    fails from the Script Manager with "cannot find pyp file", so
+    SpecialEventAdd has nothing to wake. It is not needed either - keybd_event
+    posts to the *Windows* input queue, which C4D drains on its next message
+    pump, so delivery is already deferred past the end of this script. The
+    timer only widens that gap to make the ordering comfortable.
+
+    Safe off the main thread because keybd_event is a pure Win32 call and
+    touches no c4d API. Nothing in this function may call into c4d.
+    """
+    if ms <= 0:
+        return send_key(ch)
+    if threading is None:
+        return send_key(ch)
+    try:
+        t = threading.Timer(ms / 1000.0, lambda: send_key(ch))
+        t.daemon = True
+        t.start()
+    except Exception:
+        return send_key(ch)
+    return True
+
+
+# --- editor ---------------------------------------------------------------
+
 def reveal(matched):
     """
-    Bring the XPresso editor forward on the graph that matched and scroll the
-    view to the selected nodes.
+    Bring the XPresso editor forward on the graph that matched and centre the
+    view on the selected nodes.
 
     Only one graph can be on screen at a time, so when several matched, the
     first is shown and the rest are named - their nodes stay selected, so
@@ -221,31 +268,37 @@ def reveal(matched):
     if not FOCUS_XPRESSO_EDITOR:
         return
 
-    host, master = matched[0]
+    host, tag, master = matched[0]
     if len(matched) > 1:
-        others = ", ".join("'%s'" % h.GetName() for h, _ in matched[1:])
+        others = ", ".join("'%s'" % h.GetName() for h, _, _ in matched[1:])
         print("showing '%s' - also matched in %s" % (host.GetName(), others))
+
+    # Make the XPresso tag the active one first, so the editor is pointed at
+    # this graph before it is asked to do anything with it.
+    doc = c4d.documents.GetActiveDocument()
+    try:
+        doc.SetActiveTag(tag)
+        c4d.EventAdd()
+    except Exception:
+        pass
 
     if not graphview.OpenDialog(XPRESSO_EDITOR_ID, master):
         print("couldn't open the XPresso editor - nodes are still selected")
         return
 
-    if CENTRE_ON_MATCH:
-        # Only lands because OpenDialog just made this editor the active
-        # manager; see the note at the top of the file. Where it doesn't,
-        # this frames the object in the 3D viewport instead - so the
-        # viewport is put straight back.
-        doc = c4d.documents.GetActiveDocument()
-        state = viewport_camera(doc)
+    if not CENTRE_ON_MATCH:
+        return
 
-        c4d.CallCommand(CMD_FRAME_SELECTED_ELEMENTS)
+    # Ask for keyboard focus. Queued, not immediate - which is why the
+    # keystroke below is deferred rather than sent on the next line.
+    c4d.CallCommand(XPRESSO_EDITOR_ID)
 
-        if restore_viewport(state):
-            print("the XPresso editor wasn't the active manager, so that "
-                  "framed the 3D viewport instead - put it back, but the "
-                  "graph didn't centre. Click in the XPresso editor and run "
-                  "again, or set CENTRE_ON_MATCH = False.")
-            c4d.EventAdd()
+    if send_key_later(CENTRE_KEY, KEY_DELAY_MS):
+        print("centring: '%s' queued for the editor (+%dms)."
+              % (CENTRE_KEY, KEY_DELAY_MS))
+    else:
+        print("centring needs Windows - nodes are still selected, press '%s' "
+              "in the editor yourself." % CENTRE_KEY)
 
 
 def main():
@@ -271,7 +324,7 @@ def main():
         return
 
     total_hits = 0
-    matched = []          # (host, master) for every graph that had a hit
+    matched = []          # (host, tag, master) for every graph that had a hit
 
     for host, tag in tags:
         master = tag.GetNodeMaster()
@@ -311,7 +364,7 @@ def main():
 
         total_hits += len(hits)
         if hits:
-            matched.append((host, master))
+            matched.append((host, tag, master))
 
         if not hits:
             # nothing matched - dump what IS in there so you can see why
