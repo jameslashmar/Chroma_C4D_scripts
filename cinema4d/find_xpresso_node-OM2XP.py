@@ -14,8 +14,13 @@ from c4d.modules import graphview
 
 # Bring the XPresso editor forward on the graph that matched, and scroll the
 # view to the node(s) found.
+#
+# CENTRE_ON_MATCH is off because it does not work - see note 3. Every route
+# to it was tried against a live 2026 session and none is reliable. It is
+# left in place, and switchable, in case a later version fixes the
+# underlying problem. Selecting the nodes is the part that does work.
 FOCUS_XPRESSO_EDITOR = True
-CENTRE_ON_MATCH = True
+CENTRE_ON_MATCH = False
 
 # The framing command can miss and hit the 3D viewport instead (see note 3),
 # so the viewport camera is snapshotted before it and put back if it moved.
@@ -52,20 +57,34 @@ CMD_FRAME_SELECTED_ELEMENTS = 13038   # the editor's own framing command
 #    Because this never touches zoom, setting a comfortable level once by
 #    hand means every run afterwards lands the match there.
 #
-# 3. The framing command can go to the wrong window, so the viewport is put
-#    back afterwards. OpenDialog only makes the editor active when it
-#    actually opens it - if the XPresso window is already open it returns
-#    True and activates nothing. 13038 then falls through to whichever
-#    manager IS active, and when that is the 3D viewport it frames the
-#    selected object there and zooms the view you were working in. C4D
-#    offers no way to ask which manager is active, so the miss can't be
-#    predicted or prevented.
+# 3. Centring the graph on the node does not work, and CENTRE_ON_MATCH is
+#    off because of it. 13038 goes to whichever manager is active, and
+#    nothing a script can do makes the XPresso editor active. Every route
+#    was tried against a live 2026 session:
 #
-#    It can be undone, though, which is what PROTECT_VIEWPORT does: read the
-#    active camera's matrix before calling, and put it back if it changed.
-#    A hit costs nothing (the matrix is untouched and the restore is a
-#    no-op); a miss is reverted before anyone sees it. The console says so
-#    when it happens, since it means the graph didn't centre either.
+#      CallCommand(13038) alone .................. selects, view unmoved
+#      OpenDialog(1001148) then 13038 ............ appeared to work once,
+#                                                  never reproduced
+#      CallCommand(1001145) then 13038 ........... that is the X-Manager,
+#                                                  not the editor
+#      CallCommand(1001148) then 13038 ........... activation is queued for
+#                                                  the next message loop, so
+#                                                  13038 still goes to the
+#                                                  old manager
+#      SendCoreMessage, COREMSG_CINEMA_EXECUTE-
+#      EDITORCOMMAND + ...EXECUTEMANAGER ......... accepted, returns a
+#                                                  container, does nothing
+#      CloseDialog then OpenDialog then 13038 .... view unmoved
+#
+#    The workflow that does work: run this to select the node, then frame it
+#    yourself in the editor. The selection is already made and waiting.
+#
+#    PROTECT_VIEWPORT guards the one dangerous case. When 13038 misses and
+#    the 3D viewport happens to be the active manager, it frames the
+#    selected object there and zooms the view you were working in. So the
+#    camera's local matrix is read before the call and put back if it
+#    moved - measured at 0.0000 units across repeated runs. It only matters
+#    if CENTRE_ON_MATCH is switched back on.
 
 
 def collect_nodes(node, out):

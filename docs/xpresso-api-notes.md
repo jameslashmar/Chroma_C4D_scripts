@@ -32,10 +32,24 @@ Established by probing a live 2026 session, not from docs. All of it is negative
 >
 > It can be reverted, which is what makes the feature shippable: snapshot the active camera's matrix before the call and restore it if it changed. Use the **local** matrix (`GetMl`/`SetMl`), not the global one — `SetMg` converts through the camera's parent and does not round-trip exactly, leaving drift on every run. Measured over repeated runs, `GetMl`/`SetMl` holds the viewport at 0.0000 units of movement. `c4d.Matrix.__eq__` is a value comparison, so a plain `==` is a sound change test.
 
-**Centring the view on the selection works, via one command.** `c4d.CallCommand(13038)` — "Frame Selected Elements" — scrolls the graph to the selected nodes. Two conditions:
+**Centring the view on a node cannot be done from a script.** `c4d.CallCommand(13038)` — "Frame Selected Elements" — is the only command that scrolls a graph to its selection, and it dispatches to whichever manager is **active**. A script run has no manager focus, and nothing available in Python makes the XPresso editor active. Every route, tried against a live 2026 session:
 
-- **The XPresso editor must be the active manager.** Called cold from a script it selects the node and does nothing visible, because `CallCommand` dispatches to whatever manager currently has focus. `c4d.modules.graphview.OpenDialog(1001148, master)` is what makes it active — `1001148` is the "XPresso Editor" plugin id. `CallCommand(1001148)` does *not* work as a substitute: activation is queued for the next message loop, so the framing call that follows in the same script still goes to the old manager.
-- **It only pans.** It never zooms to fit, even with every node in the graph selected — so zoom can't be driven indirectly by widening the selection first.
+| Attempt | Result |
+|---|---|
+| `CallCommand(13038)` alone | node selected, view unmoved |
+| `OpenDialog(1001148, master)` then `13038` | appeared to work **once**, never reproduced |
+| `CallCommand(1001145)` then `13038` | `1001145` is the X-Manager, not the editor |
+| `CallCommand(1001148)` then `13038` | `IsCommandEnabled(1001148)` is `True`, so it is a real command, but activation is queued for the next message loop and `13038` still reaches the old manager |
+| `SendCoreMessage` with `COREMSG_CINEMA_EXECUTEEDITORCOMMAND` + `COREMSG_CINEMA_EXECUTEMANAGER` | accepted, returns a `BaseContainer`, executes nothing |
+| `CloseDialog(1001148)` then `OpenDialog` then `13038` | view unmoved |
+
+Confirmed failing both over a socket-plugin bridge **and** when run normally from Extensions → User Scripts, so it isn't an artefact of the test harness.
+
+**When `13038` misses it is not harmless.** It goes to whatever manager *is* active, and if that is the 3D viewport it frames the selected object there and zooms the view the user was working in. Snapshot the active camera's **local** matrix before the call and restore it if it moved (`GetMl`/`SetMl` — `SetMg` converts through the parent and does not round-trip, leaving drift each run). Measured at 0.0000 units across repeated runs.
+
+**Method note.** The single early success was never reproduced under any condition, and building on it cost several rounds of work. One unrepeated positive observation of a UI side effect is noise — reproduce it before designing around it.
+
+The workable pattern is to select the nodes and let the user frame them; the selection is already made when they get there. **`13038` only pans in any case** — it never zooms to fit, even with every node selected, so zoom can't be driven indirectly by widening the selection first.
 
 **Setting the zoom is impossible.** Not merely unexposed:
 
