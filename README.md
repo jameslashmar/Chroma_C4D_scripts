@@ -25,7 +25,11 @@ Select an object (or tag) in the Object Manager, run the script, and it selects 
 
 It searches **every** XPresso tag in the scene, so you don't need to know which rig the object is wired into or have the right tag selected first. Nodes nested inside XGroups are found too. Matching is on object identity first, falling back to a name match if nothing exact turns up — useful in a rig with several objects called `Sweep`. If nothing matches, it prints every node and what it references so you can see why.
 
-Written for a 61-node rig where hunting for "which node drives this null?" by eye was the bottleneck.
+It then **brings the XPresso editor forward on the graph that matched and centres the view on the node**, so on a big rig you land on it rather than having to go looking. Where several graphs matched, the first is shown and the rest are named in the console — their nodes stay selected, so switching to one of those tags shows the selection already made. Set `FOCUS_XPRESSO_EDITOR = False` to just select and report.
+
+**It deliberately never changes the zoom**, and that isn't a shortcut — the zoom cannot be set at all. `GvNodeGUI`, the graph view's UI layer in the C++ SDK, exposes `GetZoom()` with no setter, and isn't bridged to Python in the first place; the editor's View > Zoom entries have no command ids; and the only reachable zoom commands drive the 3D viewport. Which works out well: the editor's own `s` shortcut zooms hard into a single node and is usually far too close, whereas this centres the match at whatever zoom you're already at — so set a comfortable level once and every run lands there.
+
+Written for a 61-node rig (since grown to 80) where hunting for "which node drives this null?" by eye was the bottleneck.
 
 ### `select_xpresso_reference-XP2OM.py`
 

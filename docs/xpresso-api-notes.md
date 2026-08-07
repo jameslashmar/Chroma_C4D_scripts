@@ -24,6 +24,28 @@ Scanning every id in the container rather than hardcoding `GV_OBJECT_OBJECT_ID` 
 
 **`GvNode` has no `GetTitle()` or `SetSelected()`.** Use `GetName()` for the label, and `SetBit(c4d.BIT_ACTIVE)` / `DelBit(c4d.BIT_ACTIVE)` for selection. Call `c4d.modules.graphview.RedrawMaster(master)` afterwards or the editor won't repaint and the selection change is invisible.
 
+## Driving the editor's view — what is and isn't possible (2026-08-07)
+
+Established by probing a live 2026 session, not from docs. All of it is negative space worth knowing before you spend an evening on it.
+
+**Centring the view on the selection works, via one command.** `c4d.CallCommand(13038)` — "Frame Selected Elements" — scrolls the graph to the selected nodes. Two conditions:
+
+- **The XPresso editor must be the active manager.** Called cold from a script it selects the node and does nothing visible, because `CallCommand` dispatches to whatever manager currently has focus. `c4d.modules.graphview.OpenDialog(1001148, master)` is what makes it active — `1001148` is the "XPresso Editor" plugin id. `CallCommand(1001148)` does *not* work as a substitute: activation is queued for the next message loop, so the framing call that follows in the same script still goes to the old manager.
+- **It only pans.** It never zooms to fit, even with every node in the graph selected — so zoom can't be driven indirectly by widening the selection first.
+
+**Setting the zoom is impossible.** Not merely unexposed:
+
+- `GvNodeGUI` is the graph view's UI layer in the C++ SDK, with `CenterNodes()`, `SetFocus()`, `ShowAllNodes()`, `SetNodePos()` and `GetZoom()` — but **no `SetZoom`**, so no plugin in any language can set it.
+- `GvNodeGUI` isn't bridged to Python anyway. `c4d.modules.graphview` exports exactly eleven names — `CloseDialog, GetDefaultOperatorIcon, GetMaster, GetPrefs, GvNode, GvNodeMaster, GvPort, OpenDialog, RedrawMaster, SetPrefs, XPressoTag` — and `GvNodeMaster` has no GUI accessor.
+- The editor's View > Zoom entries (25/50/75/100%) have **no command ids**. An enumeration of all 3,390 command plugins turns up one percentage ladder (12.5/25/50/100/200/400/800) which belongs to another manager and stays disabled with XPresso frontmost.
+- The only reachable zoom commands, `14063` / `14064`, are the **3D viewport's** — calling them zooms the wrong window.
+
+**Neither prefs container holds the view transform.** `GvNodeMaster.GetPrefs()` returns six unrelated settings (`100=1, 101=0, 102=0, 103=1001, 104=200, 105=80.0`), and `GV_WORLD_CONFIG` carries only undo depth.
+
+**Manager menus aren't reachable from Python.** `c4d.gui.GetMenuResource()` returns a container for `M_EDITOR` only; every manager-menu name tried returns `None`. And `SendCoreMessage` with `COREMSG_CINEMA_EXECUTEEDITORCOMMAND` + `COREMSG_CINEMA_EXECUTEMANAGER` is accepted and returns a container, but does not execute the command in that manager.
+
+The practical upshot: centre, never zoom. The editor's `s` shortcut zooms far too close on a single node; leaving zoom alone means the user sets a comfortable level once and every run lands there.
+
 ## Node layout
 
 **Node position lives three containers deep:** `node.GetDataInstance()` → `GetContainerInstance(c4d.ID_SHAPECONTAINER)` → `GetContainerInstance(c4d.ID_OPERATORCONTAINER)`, then ids 100 and 101 for x/y position and 108 and 109 for x/y size, all via `GetReal` / `SetReal`.
