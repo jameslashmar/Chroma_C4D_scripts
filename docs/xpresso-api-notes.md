@@ -42,6 +42,9 @@ Established by probing a live 2026 session, not from docs. All of it is negative
 | `CallCommand(1001148)` then `13038` | `IsCommandEnabled(1001148)` is `True`, so it is a real command, but activation is queued for the next message loop and `13038` still reaches the old manager |
 | `SendCoreMessage` with `COREMSG_CINEMA_EXECUTEEDITORCOMMAND` + `COREMSG_CINEMA_EXECUTEMANAGER` | accepted, returns a `BaseContainer`, executes nothing |
 | `CloseDialog(1001148)` then `OpenDialog` then `13038` | view unmoved |
+| Editor closed **by hand** first, so `OpenDialog` genuinely creates the window, then `13038` | view unmoved |
+
+That last row matters, because it kills the most plausible theory. Two early tests did centre, and both were runs where `OpenDialog` visibly opened a new floating window — which suggested activation was a side effect of *creating* the dialog, and that the feature would work once per manually-closed window. Tested directly with every XPresso window closed beforehand: it still does not centre. So the two early successes remain unexplained, and no proposed mechanism survives contact with them.
 
 Confirmed failing both over a socket-plugin bridge **and** when run normally from Extensions → User Scripts, so it isn't an artefact of the test harness.
 
