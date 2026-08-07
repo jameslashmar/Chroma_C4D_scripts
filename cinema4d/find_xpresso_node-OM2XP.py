@@ -22,18 +22,6 @@ CENTRE_ON_MATCH = True
 # say in it.
 CENTRE_ZOOM = 2.0
 
-# Size of the XPresso editor's drawing area, in pixels. C4D exposes no way to
-# ask, so it has to be told. Only affects how exactly centred the node lands;
-# being wrong by a few hundred pixels puts it off-centre, never off-screen.
-#
-# To recalibrate: position a node in the middle of the editor by hand, then
-# run probe_xpresso_view.py for `scroll` and `zoom`, and read the node's
-# centre from this script's output. Then
-#     VIEW_W = (centre_x - scroll_x) * zoom * 2
-#     VIEW_H = (centre_y - scroll_y) * zoom * 2
-VIEW_W = 1184.0
-VIEW_H = 676.0
-
 XPRESSO_EDITOR_ID = 1001148           # "XPresso Editor" in the plugin list
 
 # The view transform lives on the ROOT XGroup's operator container:
@@ -48,19 +36,31 @@ NODE_SIZE_IDS = (108, 109)            # node width/height
 # 1. The view transform is readable AND writable, which earlier notes in this
 #    repo said was impossible. Measured against a live 2026 session:
 #
-#        screen_px = (graph_pos - scroll) * zoom
+#        view_centre_in_graph_units = -scroll
 #
-#    so `scroll` is the view's top-left corner expressed in graph units, and
-#    centring a point is scroll = point - viewport / (2 * zoom).
+#    so centring on a point is simply scroll = -point. No viewport size is
+#    involved, and none is needed - which is just as well, because C4D gives
+#    no way to ask how big the editor is.
 #
-#    The giveaway was that `scroll * zoom` comes out to exact integers
-#    (-275.00, -183.00 on the calibration sample). The editor keeps its scroll
-#    in whole pixels and stores pixels/zoom here.
+#    How that was pinned down, because it is easy to get wrong: press 'h' in
+#    the editor (frame all) and 's' (frame selection) and read the container
+#    each time. Both leave scroll at exactly (0, 0) - 'h' with the graph's
+#    bounding box symmetric about the origin, 's' with the selected node's
+#    centre on it. The editor re-bases every node coordinate so the view
+#    centre is the origin, rather than keeping an offset. That also explains
+#    why node coordinates jump wholesale between runs: framing rebases them.
+#
+#    The sign has to be measured, not assumed. Writing scroll = (500, 0)
+#    moves the node to the RIGHT, i.e. the view centre goes to -500. Fitting
+#    a model to a single hand-centred sample cannot tell you this: the offset
+#    silently absorbs into whatever viewport size you invent, and every
+#    centring then lands mirrored about the origin.
 #
 #    Writing scroll and zoom is navigation, not editing: shifting scroll by
 #    thousands of units and root position by hundreds moved 0 of 80 node
 #    coordinates in a production rig. Do not confuse ids 102/103 (the view)
-#    with 100/101 on the root, which are the root XGroup's own position.
+#    with 100/101 on the root, which are the root XGroup's own position -
+#    writing those really does move the graph's contents.
 #
 # 2. There is no command that centres an XPresso graph, so don't look for one.
 #    Enumerating all 3,390 command plugins shows the entire classic XPresso
@@ -218,8 +218,8 @@ def centre_view(master, point, zoom):
     """
     Put `point` (in root-canvas coordinates) at the middle of the editor.
 
-    screen_px = (graph_pos - scroll) * zoom, so the top-left corner we want is
-    the point minus half a viewport's worth of graph units.
+    The view centre is -scroll, so this is just the negated point. The sign is
+    measured, not assumed - see note 1.
     """
     root = master.GetRoot()
     if root is None:
@@ -230,8 +230,8 @@ def centre_view(master, point, zoom):
 
     try:
         bc.SetFloat(VIEW_ZOOM_ID, float(zoom))
-        bc.SetFloat(VIEW_SCROLL_IDS[0], point[0] - VIEW_W / (2.0 * zoom))
-        bc.SetFloat(VIEW_SCROLL_IDS[1], point[1] - VIEW_H / (2.0 * zoom))
+        bc.SetFloat(VIEW_SCROLL_IDS[0], -point[0])
+        bc.SetFloat(VIEW_SCROLL_IDS[1], -point[1])
     except Exception as exc:
         print("couldn't write the view transform: %s" % exc)
         return False

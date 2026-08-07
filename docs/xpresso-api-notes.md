@@ -41,16 +41,16 @@ bc[100], bc[101]   # the root XGroup's OWN position - not the view
 The mapping, measured against a live 2026 session:
 
 ```
-screen_px = (graph_pos - scroll) * zoom
+view_centre_in_graph_units = -scroll
 ```
 
-so centring a point is `scroll = point - viewport / (2 * zoom)`.
+so centring on a point is just `scroll = -point`. **No viewport size is involved**, which matters because C4D gives no way to ask how big the editor is.
 
-**How it was identified.** Sampling every container while the mouse zoomed showed exactly one value moving: id 104. Panning moved only 102/103. The clincher for the units was that `scroll * zoom` lands on exact integers (`-275.00, -183.00` on the calibration sample) — the editor keeps scroll in whole pixels and stores pixels/zoom here.
+**How to pin this down, because it is easy to get wrong.** Press `h` (frame all) and `s` (frame selection) in the editor and read the container after each. Both leave `scroll` at exactly `(0, 0)` — `h` with the graph's bounding box symmetric about the origin, `s` with the selected node's centre on it. The editor **re-bases every node coordinate** so the view centre is the origin, rather than keeping a scroll offset. That is also why node coordinates jump wholesale between runs: framing rebases them. Reading node position and scroll in the same run is therefore always correct; comparing coordinates *across* runs is meaningless.
+
+**The sign has to be measured.** Writing `scroll = (500, 0)` moves the node to the **right** — the view centre goes to `-500`. Fitting a model to a single hand-centred sample cannot tell you this: a sign error silently absorbs into whatever viewport size you invent, the numbers look self-consistent, and every centring lands mirrored about the origin. Two known states (`h` and `s`) settle it in seconds; one fitted sample never will.
 
 **Writing the view does not edit the graph.** Shifting scroll by thousands of units and root position by hundreds changed **0 of 80** node coordinates on a production rig. Verified explicitly, because 100/101 are node-position ids everywhere else and confusing them with 102/103 would silently offset a whole graph.
-
-**The viewport size cannot be queried**, so it has to be supplied. `find_xpresso_node-OM2XP.py` carries `VIEW_W`/`VIEW_H`. Getting it wrong lands the node off-centre, never off-screen. Recalibrate by centring a node by hand, reading `scroll` and `zoom`, then `VIEW_W = (centre_x - scroll_x) * zoom * 2`.
 
 **Coordinates are per-canvas.** Each XGroup has its own, so a nested node cannot be centred by scrolling the root — aim at its top-level ancestor instead.
 
