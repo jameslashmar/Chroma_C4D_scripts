@@ -14,12 +14,13 @@ from c4d.modules import graphview
 
 # Bring the XPresso editor forward on the graph that matched, and scroll the
 # view to the node(s) found.
-#
-# OFF BY DEFAULT, because centring cannot be done safely. See note 3 below:
-# when it misses, it zooms the 3D viewport instead. Selecting the nodes is
-# the reliable part and always happens.
-FOCUS_XPRESSO_EDITOR = False
-CENTRE_ON_MATCH = False
+FOCUS_XPRESSO_EDITOR = True
+CENTRE_ON_MATCH = True
+
+# The framing command can miss and hit the 3D viewport instead (see note 3),
+# so the viewport camera is snapshotted before it and put back if it moved.
+# When the framing lands where it should, this is a no-op.
+PROTECT_VIEWPORT = True
 
 XPRESSO_EDITOR_ID = 1001148           # "XPresso Editor" in the plugin list
 CMD_FRAME_SELECTED_ELEMENTS = 13038   # the editor's own framing command
@@ -51,18 +52,20 @@ CMD_FRAME_SELECTED_ELEMENTS = 13038   # the editor's own framing command
 #    Because this never touches zoom, setting a comfortable level once by
 #    hand means every run afterwards lands the match there.
 #
-# 3. Why centring is off by default: it is not safely repeatable. OpenDialog
-#    only makes the editor active when it actually opens it - if your XPresso
-#    window is already open it returns True and activates nothing. The
-#    framing command then falls through to whichever manager IS active, and
-#    when that is the 3D viewport, 13038 frames the selected object there
-#    and zooms your viewport instead. That is a destructive side effect on a
-#    scene you were looking at, so it stays off until it can be made
-#    conditional on the editor genuinely being active - and there is no way
-#    to ask C4D which manager that is.
+# 3. The framing command can go to the wrong window, so the viewport is put
+#    back afterwards. OpenDialog only makes the editor active when it
+#    actually opens it - if the XPresso window is already open it returns
+#    True and activates nothing. 13038 then falls through to whichever
+#    manager IS active, and when that is the 3D viewport it frames the
+#    selected object there and zooms the view you were working in. C4D
+#    offers no way to ask which manager is active, so the miss can't be
+#    predicted or prevented.
 #
-#    Turn both settings on if you want it and can live with that: it does
-#    work when the XPresso editor is already the focused manager.
+#    It can be undone, though, which is what PROTECT_VIEWPORT does: read the
+#    active camera's matrix before calling, and put it back if it changed.
+#    A hit costs nothing (the matrix is untouched and the restore is a
+#    no-op); a miss is reverted before anyone sees it. The console says so
+#    when it happens, since it means the graph didn't centre either.
 
 
 def collect_nodes(node, out):
@@ -149,6 +152,44 @@ def all_xpresso_tags(doc):
     return found
 
 
+def viewport_camera(doc):
+    """
+    The camera the active viewport is looking through, and its matrix. A
+    scene camera if one is active, otherwise the editor camera - framing
+    moves whichever is in use.
+    """
+    if not PROTECT_VIEWPORT:
+        return None
+    try:
+        bd = doc.GetActiveBaseDraw()
+        if bd is None:
+            return None
+        cam = bd.GetSceneCamera(doc) or bd.GetEditorCamera()
+        if cam is None:
+            return None
+        # The local matrix, not the global one. Writing a global matrix back
+        # converts through the camera's parent and doesn't round-trip exactly,
+        # so restoring by SetMg leaves a little drift on every run. The local
+        # matrix is the camera's own state and goes back untouched.
+        return (cam, cam.GetMl())
+    except Exception:
+        return None
+
+
+def restore_viewport(state):
+    """Put the viewport back if the framing command moved it. True if it did."""
+    if state is None:
+        return False
+    cam, before = state
+    try:
+        if cam.GetMl() == before:
+            return False
+        cam.SetMl(before)
+    except Exception:
+        return False
+    return True
+
+
 def reveal(matched):
     """
     Bring the XPresso editor forward on the graph that matched and scroll the
@@ -172,8 +213,20 @@ def reveal(matched):
 
     if CENTRE_ON_MATCH:
         # Only lands because OpenDialog just made this editor the active
-        # manager; see the note at the top of the file.
+        # manager; see the note at the top of the file. Where it doesn't,
+        # this frames the object in the 3D viewport instead - so the
+        # viewport is put straight back.
+        doc = c4d.documents.GetActiveDocument()
+        state = viewport_camera(doc)
+
         c4d.CallCommand(CMD_FRAME_SELECTED_ELEMENTS)
+
+        if restore_viewport(state):
+            print("the XPresso editor wasn't the active manager, so that "
+                  "framed the 3D viewport instead - put it back, but the "
+                  "graph didn't centre. Click in the XPresso editor and run "
+                  "again, or set CENTRE_ON_MATCH = False.")
+            c4d.EventAdd()
 
 
 def main():

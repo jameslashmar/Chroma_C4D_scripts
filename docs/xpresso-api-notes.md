@@ -28,7 +28,9 @@ Scanning every id in the container rather than hardcoding `GV_OBJECT_OBJECT_ID` 
 
 Established by probing a live 2026 session, not from docs. All of it is negative space worth knowing before you spend an evening on it.
 
-> **Read this first: centring is not safely repeatable, and the failure mode is destructive.** `OpenDialog` only makes the editor active when it actually *opens* it — if the XPresso window is already open it returns `True` and activates nothing. `CallCommand(13038)` then falls through to whichever manager *is* active, and when that is the 3D viewport it frames the selected object there and **zooms the user's viewport**. There is no API to ask which manager is active, so the miss cannot be guarded against. OM2XP ships with this off by default for that reason. What follows is what works when the editor genuinely is the active manager.
+> **Read this first: the framing command can hit the 3D viewport instead, so undo it afterwards.** `OpenDialog` only makes the editor active when it actually *opens* it — if the XPresso window is already open it returns `True` and activates nothing. `CallCommand(13038)` then falls through to whichever manager *is* active, and when that is the 3D viewport it frames the selected object there and **zooms the user's viewport**. There is no API to ask which manager is active, so the miss cannot be predicted.
+>
+> It can be reverted, which is what makes the feature shippable: snapshot the active camera's matrix before the call and restore it if it changed. Use the **local** matrix (`GetMl`/`SetMl`), not the global one — `SetMg` converts through the camera's parent and does not round-trip exactly, leaving drift on every run. Measured over repeated runs, `GetMl`/`SetMl` holds the viewport at 0.0000 units of movement. `c4d.Matrix.__eq__` is a value comparison, so a plain `==` is a sound change test.
 
 **Centring the view on the selection works, via one command.** `c4d.CallCommand(13038)` — "Frame Selected Elements" — scrolls the graph to the selected nodes. Two conditions:
 
