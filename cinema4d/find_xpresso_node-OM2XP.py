@@ -13,9 +13,13 @@ from c4d.modules import graphview
 # --- settings -------------------------------------------------------------
 
 # Bring the XPresso editor forward on the graph that matched, and scroll the
-# view to the node(s) found. Set either to False to just select and report.
-FOCUS_XPRESSO_EDITOR = True
-CENTRE_ON_MATCH = True
+# view to the node(s) found.
+#
+# OFF BY DEFAULT, because centring cannot be done safely. See note 3 below:
+# when it misses, it zooms the 3D viewport instead. Selecting the nodes is
+# the reliable part and always happens.
+FOCUS_XPRESSO_EDITOR = False
+CENTRE_ON_MATCH = False
 
 XPRESSO_EDITOR_ID = 1001148           # "XPresso Editor" in the plugin list
 CMD_FRAME_SELECTED_ELEMENTS = 13038   # the editor's own framing command
@@ -46,6 +50,19 @@ CMD_FRAME_SELECTED_ELEMENTS = 13038   # the editor's own framing command
 #    shortcut zooms hard into a single node, which is usually far too close.
 #    Because this never touches zoom, setting a comfortable level once by
 #    hand means every run afterwards lands the match there.
+#
+# 3. Why centring is off by default: it is not safely repeatable. OpenDialog
+#    only makes the editor active when it actually opens it - if your XPresso
+#    window is already open it returns True and activates nothing. The
+#    framing command then falls through to whichever manager IS active, and
+#    when that is the 3D viewport, 13038 frames the selected object there
+#    and zooms your viewport instead. That is a destructive side effect on a
+#    scene you were looking at, so it stays off until it can be made
+#    conditional on the editor genuinely being active - and there is no way
+#    to ask C4D which manager that is.
+#
+#    Turn both settings on if you want it and can live with that: it does
+#    work when the XPresso editor is already the focused manager.
 
 
 def collect_nodes(node, out):

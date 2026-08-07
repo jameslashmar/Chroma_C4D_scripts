@@ -28,6 +28,8 @@ Scanning every id in the container rather than hardcoding `GV_OBJECT_OBJECT_ID` 
 
 Established by probing a live 2026 session, not from docs. All of it is negative space worth knowing before you spend an evening on it.
 
+> **Read this first: centring is not safely repeatable, and the failure mode is destructive.** `OpenDialog` only makes the editor active when it actually *opens* it — if the XPresso window is already open it returns `True` and activates nothing. `CallCommand(13038)` then falls through to whichever manager *is* active, and when that is the 3D viewport it frames the selected object there and **zooms the user's viewport**. There is no API to ask which manager is active, so the miss cannot be guarded against. OM2XP ships with this off by default for that reason. What follows is what works when the editor genuinely is the active manager.
+
 **Centring the view on the selection works, via one command.** `c4d.CallCommand(13038)` — "Frame Selected Elements" — scrolls the graph to the selected nodes. Two conditions:
 
 - **The XPresso editor must be the active manager.** Called cold from a script it selects the node and does nothing visible, because `CallCommand` dispatches to whatever manager currently has focus. `c4d.modules.graphview.OpenDialog(1001148, master)` is what makes it active — `1001148` is the "XPresso Editor" plugin id. `CallCommand(1001148)` does *not* work as a substitute: activation is queued for the next message loop, so the framing call that follows in the same script still goes to the old manager.
